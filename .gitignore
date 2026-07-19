@@ -89,3 +89,4 @@ Thumbs.db
 # Sandbox infra (not part of admin panel)
 /Caddyfile
 /.zscripts/
+post-vercel-migration.png

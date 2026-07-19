@@ -3,6 +3,12 @@
   "buildCommand": "bun run build",
   "installCommand": "bun install",
   "functions": {
+    "src/app/api/telegram/webhook/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/telegram/setup/route.ts": {
+      "maxDuration": 30
+    },
     "src/app/api/**/route.ts": {
       "maxDuration": 30
     }

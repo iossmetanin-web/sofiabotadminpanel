@@ -1,131 +1,141 @@
-# Sofia Bot — Admin Panel + Python Bot
+# Sofia Bot — Next.js Webhook + Admin Panel (Vercel-only)
 
 Telegram bot **Sofia** (мистический таро/астрология компаньон) с админ-панелью.
+Вся архитектура работает **только на Vercel** — бот и админка в одном Next.js приложении.
 
 ## Архитектура
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Telegram (@oracultetris_bot)                                │
-│  ↓ long polling (aiogram 3.x)                                │
+│  ↓ webhook (POST to /api/telegram/webhook)                   │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  Python Bot (python-bot/)                            │    │
-│  │  - Deployed to Render/Fly.io/Railway (long-running)  │    │
-│  │  - aiogram 3.x, long polling (NOT webhooks)          │    │
-│  │  - 10 commands, onboarding FSM, 7 reading types      │    │
-│  │  - Crystal economy, referrals, subscriptions         │    │
-│  │  - OpenRouter AI for interpretations                 │    │
-│  │  - Heartbeat every 20s → BotHeartbeat table          │    │
-│  │  - Polls BotCommand table every 2s for admin cmds    │    │
+│  │  Vercel (Next.js 16 serverless)                      │    │
+│  │  - Admin Panel (9 tabs, /)                            │    │
+│  │  - Webhook handler (/api/telegram/webhook)            │    │
+│  │  - Bot logic in src/lib/bot/                          │    │
+│  │  - Telegram API client (fetch, no SDK)                │    │
+│  │  - OpenRouter AI for tarot interpretations            │    │
+│  │  - All bot state in DB (PostgreSQL via Prisma)        │    │
 │  └────────────────────┬────────────────────────────────┘    │
-│                       │ shared PostgreSQL (Neon free tier)   │
+│                       │ PostgreSQL (Neon / Supabase)         │
 │  ┌────────────────────┴────────────────────────────────┐    │
-│  │  Next.js Admin Panel (src/)                          │    │
-│  │  - Deployed to Vercel (serverless)                   │    │
-│  │  - 9 tabs: Обзор/Пользователи/Расклады/Серии/         │    │
-│  │    Экономика/Дайджест/Рассылки/Управление            │    │
-│  │  - Controls bot via BotCommand queue                 │    │
-│  │  - Reads bot status from BotHeartbeat table          │    │
+│  │  Database (Neon free tier, доступен из РФ)            │    │
+│  │  - Users, Readings, Transactions, BotCommands         │    │
+│  │  - BotHeartbeat (singleton, updated on each webhook)  │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Почему бот НЕ на Vercel
+## Почему webhook mode работает на Vercel
 
-Vercel — serverless. Каждый запрос живёт максимум 10-60 секунд. Telegram long polling держит соединение открытым минутами. Serverless убивает процесс → бот умирает.
+Vercel — serverless, каждый запрос живёт максимум 10-60 секунд. **Long polling**
+в serverless не работает (процесс убивается между запросами), но **webhook mode** —
+идеально подходит:
 
-**Решение:** бот деплоится на long-running host (Render/Fly.io/Railway), админка — на Vercel. Они общаются через общую PostgreSQL базу.
+- Telegram отправляет **один POST-запрос** на каждое сообщение пользователя.
+- Vercel serverless функция обрабатывает его за <3 секунды (обычно).
+- Возвращает `200 OK` → Telegram счастлив, ждёт следующего сообщения.
+- Не нужен постоянный процесс (в отличие от long polling).
+- AI-интерпретации могут занимать 10-20 секунд на cold start → webhook endpoint
+  имеет `maxDuration: 60` в `vercel.json`.
+
+**Решение:** и бот (webhook), и админка — один Next.js деплой на Vercel. Общая
+PostgreSQL (Neon, доступен из РФ) хранит состояние и очередь команд.
 
 ## Быстрый старт
 
-### 1. База данных (Neon PostgreSQL — free)
+### 1. База данных — Neon PostgreSQL (free, доступен из РФ)
 
 1. Зарегистрируйся на https://neon.tech
 2. Создай проект → получи connection string вида:
    ```
    postgresql://user:pass@ep-xxx.eu-central-1.aws.neon.tech/dbname?sslmode=require
    ```
-3. Сохрани его — он нужен и для админки, и для бота.
+3. Сохрани его — он нужен и для локального dev, и для Vercel.
 
-### 2. Админ-панель → Vercel
+### 2. Локальная разработка
 
 ```bash
-# Локально
+git clone https://github.com/iossmetanin-web/sofiabotadminpanel.git
+cd sofiabotadminpanel
 bun install
-# В prisma/schema.prisma: provider = "postgresql"
-# В .env: DATABASE_URL=postgresql://... (твой Neon URL)
+cp .env.example .env
+# Отредактируй .env (см. раздел «Переменные окружения» ниже)
+# Поменяй provider в prisma/schema.prisma: sqlite → postgresql
 bun run db:push
 bun run dev  # http://localhost:3000
 ```
 
-**Деплой на Vercel:**
-1. Push этого репозитория в GitHub
-2. Vercel.com → New Project → Import from GitHub
-3. Environment Variables:
-   - `DATABASE_URL` = твой Neon PostgreSQL URL
-4. Deploy
-5. В Vercel settings → `prisma/schema.prisma`: поменяй `provider = "sqlite"` → `provider = "postgresql"`
-6. Redeploy
-
-### 3. Python бот → Render
+### 3. Деплой на Vercel
 
 ```bash
-cd python-bot/
+# 1. Подготовка
+git clone https://github.com/iossmetanin-web/sofiabotadminpanel.git
+cd sofiabotadminpanel
+bun install
+
+# 2. БД — Neon (доступен из РФ)
+# Зарегистрируйся на https://neon.tech
+# Создай проект → получи DATABASE_URL
+
+# 3. Настрой .env
 cp .env.example .env
 # Отредактируй .env:
+#   DATABASE_URL=postgresql://... (Neon)
 #   BOT_TOKEN=8171475783:AAFCkLhxfwjUafqRPX0bqEYP6fciM84t7hk
 #   ADMIN_IDS=987617664
-#   DATABASE_URL=postgresql://... (тот же Neon URL, что у админки)
 #   OPENROUTER_API_KEY=sk-or-v1-...
+#   WEBHOOK_URL=https://твой-vercel-url.vercel.app
+#   BOT_USERNAME=oracultetris_bot
+
+# 4. Поменяй provider в prisma/schema.prisma: sqlite → postgresql
+
+# 5. Примени схему к БД
+bun run db:push
+
+# 6. Деплой на Vercel
+# - Vercel.com → New Project → Import from GitHub
+# - Set env vars (DATABASE_URL, BOT_TOKEN, ADMIN_IDS, OPENROUTER_API_KEY, WEBHOOK_URL, BOT_USERNAME)
+# - Deploy
+# - После деплоя: WEBHOOK_URL = твой Vercel URL (например https://sofiabotadminpanel.vercel.app)
+
+# 7. Установи webhook в Telegram
+# После деплоя открой:
+# https://твой-vercel-url.vercel.app/api/telegram/setup
+# Это вызовет Telegram setWebhook API + зарегистрирует команды в BotFather
+
+# 8. Проверь
+# - Открой админку: https://твой-vercel-url.vercel.app
+# - Вкладка "Обзор" → бот должен показать "Онлайн"
+# - Напиши боту в Telegram /start → должна начаться онбординг
 ```
 
-**Деплой на Render.com (бесплатно):**
-1. Push папку `python-bot/` в отдельный GitHub репозиторий (или используй monorepo)
-2. Render.com → New → Web Service (или Background Worker)
-3. Connect GitHub repo
-4. Render автоматически использует `render.yaml`
-5. Environment Variables (если не через render.yaml):
-   - `BOT_TOKEN`
-   - `ADMIN_IDS`
-   - `DATABASE_URL`
-   - `OPENROUTER_API_KEY`
-6. Deploy
+### 4. Проверка после деплоя
 
-**Альтернатива — Fly.io:**
-```bash
-cd python-bot/
-fly launch  # использует Dockerfile
-fly deploy
-```
-
-**Альтернатива — Railway:**
-1. Railway.app → New Project → Deploy from GitHub repo
-2. Set env vars
-3. Railway автоматически detected Python
-
-### 4. Проверка
-
-После деплоя:
-1. Открой админку на Vercel → вкладка "Обзор" → бот должен показать "Онлайн" (heartbeat в течение 60s)
-2. Напиши боту в Telegram `/start` → должна начаться онбординг
-3. В админке → "Управление" → отправь команду "Gift crystals" → бот выполнит в течение 2s
+1. Открой админку на Vercel → вкладка **«Обзор»** → бот должен показать
+   **«Онлайн»** (heartbeat обновляется при каждом входящем webhook).
+2. Напиши боту в Telegram `/start` → должна начаться онбординг.
+3. В админке → **«Управление»** → отправь команду «Gift crystals» → бот
+   обработает её при следующем webhook-цикле (обычно мгновенно, когда
+   пользователь пишет следующее сообщение, либо из фонового апдейта).
 
 ## Переменные окружения
 
-### Админ-панель (Vercel)
-| Переменная | Описание |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection string (Neon) |
-| `ADMIN_PASSWORD` | (опц.) пароль для защиты админки |
+Все переменные задаются в Vercel → Settings → Environment Variables.
 
-### Python бот (Render)
 | Переменная | Описание |
 |---|---|
+| `DATABASE_URL` | PostgreSQL connection string (Neon). Локально можно `file:./db/custom.db` (SQLite) для dev. |
 | `BOT_TOKEN` | Telegram bot token от @BotFather |
+| `BOT_USERNAME` | Username бота без `@` (например `oracultetris_bot`) |
 | `ADMIN_IDS` | Telegram user IDs администраторов (через запятую) |
-| `DATABASE_URL` | PostgreSQL connection string (Neon) — тот же, что у админки |
-| `OPENROUTER_API_KEY` | API key для AI интерпретаций |
-| `LOG_LEVEL` | `INFO` (по умолчанию) |
+| `WEBHOOK_URL` | Публичный URL твоего Vercel деплоя (например `https://sofiabotadminpanel.vercel.app`) |
+| `TELEGRAM_WEBHOOK_SECRET` | (опц.) секрет для проверки заголовка `X-Telegram-Bot-Api-Secret-Token` |
+| `OPENROUTER_API_KEY` | API key для AI интерпретаций (OpenRouter) |
+| `ADMIN_PASSWORD` | (опц.) пароль для защиты админ-панели |
+
+См. `.env.example` — готовый шаблон.
 
 ## Команды бота
 
@@ -144,43 +154,58 @@ fly deploy
 
 ## Управление ботом из админки
 
-Админка → вкладка "Управление":
+Админка → вкладка **«Управление»**:
 - **Direct Message** — отправить сообщение конкретному пользователю
 - **Gift Crystals** — начислить кристаллы
 - **Ban / Unban** — заблокировать/разблокировать пользователя
 - **Reload Config** — перезагрузить конфигурацию бота
-- **Shutdown** — корректно остановить бота
-- **Broadcast** (вкладка "Рассылки") — массовая рассылка всем пользователям
+- **Shutdown** — корректно остановить обработку команд
+- **Broadcast** (вкладка **«Рассылки»**) — массовая рассылка всем пользователям
 
-Команды попадают в таблицу `BotCommand`, бот опрашивает её каждые 2 секунды.
+Команды попадают в таблицу `BotCommand` и обрабатываются серверной частью
+при обработке webhook-ов (а также при фоновых тиках).
 
 ## Стек
 
-- **Админ-панель**: Next.js 16, TypeScript, Tailwind CSS 4, shadcn/ui, Prisma ORM
-- **Бот**: Python 3.12, aiogram 3.x, asyncpg, Pydantic v2
-- **БД**: PostgreSQL (Neon free tier) — общая для админки и бота
-- **AI**: OpenRouter API (модель: google/gemini-2.0-flash-exp:free)
-- **Деплой**: Vercel (админка) + Render (бот)
+- **App**: Next.js 16 (App Router), TypeScript, Tailwind CSS 4, shadcn/ui
+- **ORM**: Prisma (PostgreSQL на Vercel, SQLite для локального dev)
+- **Бот**: встроенный в Next.js — webhook на `/api/telegram/webhook`,
+  Telegram Bot API через `fetch` (без SDK)
+- **БД**: PostgreSQL (Neon free tier, доступен из РФ)
+- **AI**: OpenRouter API (модель: `google/gemini-2.0-flash-exp:free`)
+- **Деплой**: **только Vercel** (serverless functions)
 
 ## Структура репозитория
 
 ```
 .
-├── prisma/schema.prisma          # Общая схема БД
-├── src/                          # Next.js админ-панель
-│   ├── app/page.tsx              # Главная страница (9 вкладок)
-│   ├── app/api/                  # API routes
-│   └── components/               # shadcn/ui + кастомные
-├── python-bot/                   # Python Telegram бот (aiogram)
+├── prisma/schema.prisma              # Общая схема БД (sqlite локально, postgresql на Vercel)
+├── src/
 │   ├── app/
-│   │   ├── main.py               # Entry point (long polling)
-│   │   ├── handlers/             # 8 обработчиков команд
-│   │   ├── services/             # Бизнес-логика
-│   │   └── i18n/                 # RU/EN
-│   ├── Dockerfile                # Для Fly.io
-│   ├── render.yaml               # Для Render.com
-│   └── requirements.txt
-└── vercel.json                   # Конфиг Vercel для админки
+│   │   ├── page.tsx                  # Админ-панель (9 вкладок)
+│   │   ├── api/
+│   │   │   ├── telegram/webhook/     # ← Webhook endpoint (Telegram → сюда)
+│   │   │   ├── telegram/setup/       # ← Установка webhook + команд
+│   │   │   ├── telegram/status/      # ← Проверка webhook
+│   │   │   ├── bot/status/           # ← Статус бота (для админки)
+│   │   │   ├── bot/command/          # ← Очередь команд (админ → бот)
+│   │   │   ├── broadcasts/           # ← Рассылки
+│   │   │   ├── users/                # ← Пользователи
+│   │   │   ├── readings/             # ← Расклады
+│   │   │   └── ...                   # ← Другие API
+│   │   └── layout.tsx
+│   ├── lib/
+│   │   ├── db.ts                     # Prisma client
+│   │   └── bot/                      # ← Логика бота (TypeScript)
+│   │       ├── telegram.ts           # ← Telegram API client (fetch)
+│   │       ├── types.ts
+│   │       ├── handlers/             # ← 10 command handlers
+│   │       ├── services/             # ← tarot, zodiac, ai, crystals, memory
+│   │       ├── i18n/                 # ← RU/EN
+│   │       └── keyboards.ts
+│   └── components/                   # shadcn/ui + кастомные
+├── vercel.json
+└── README.md
 ```
 
 ## Лицензия
