@@ -1,0 +1,1179 @@
+     1→     1→# Detailed Layer Guide for Telegram Bots
+     2→     2→
+     3→     3→## Overview
+     4→     4→
+     5→     5→This document provides an in-depth examination of each layer in a Clean Architecture Telegram bot project. While the main [Clean Architecture README](./README.md) established the principles and dependency rule, this guide focuses on the specific patterns, data structures, and implementation details that belong in each layer. Every code example uses Python with aiogram 3.x conventions and demonstrates how data flows across layer boundaries.
+     6→     6→
+     7→     7→---
+     8→     8→
+     9→     9→## Domain Layer
+    10→    10→
+    11→    11→The Domain Layer is the innermost circle. It contains the purest expression of your bot's business logic — entities that encode business rules, value objects that enforce invariants, and domain events that signal state changes. This layer has zero dependencies on any framework, database, or external service.
+    12→    12→
+    13→    13→### Entities
+    14→    14→
+    15→    15→Entities are objects with distinct identities that persist over time. Two User entities with the same data but different IDs are different users. Entities encapsulate both state and behavior related to that state.
+    16→    16→
+    17→    17→```python
+    18→    18→# domain/entities/chat.py
+    19→    19→from dataclasses import dataclass, field
+    20→    20→from datetime import datetime
+    21→    21→from enum import Enum
+    22→    22→from uuid import UUID, uuid4
+    23→    23→
+    24→    24→from domain.value_objects.telegram_id import TelegramId
+    25→    25→from domain.value_objects.language import Language
+    26→    26→from domain.exceptions.domain_exceptions import ChatAlreadyClosedError
+    27→    27→
+    28→    28→
+    29→    29→class ChatType(Enum):
+    30→    30→    PRIVATE = "private"
+    31→    31→    GROUP = "group"
+    32→    32→    SUPERGROUP = "supergroup"
+    33→    33→    CHANNEL = "channel"
+    34→    34→
+    35→    35→
+    36→    36→class ChatStatus(Enum):
+    37→    37→    ACTIVE = "active"
+    38→    38→    MUTED = "muted"
+    39→    39→    BLOCKED = "blocked"
+    40→    40→
+    41→    41→
+    42→    42→@dataclass
+    43→    43→class Chat:
+    44→    44→    """Chat entity representing a Telegram chat with its business rules."""
+    45→    45→    id: UUID = field(default_factory=uuid4)
+    46→    46→    telegram_id: TelegramId = field(default=None)
+    47→    47→    chat_type: ChatType = ChatType.PRIVATE
+    48→    48→    status: ChatStatus = ChatStatus.ACTIVE
+    49→    49→    language: Language = field(default_factory=lambda: Language.EN)
+    50→    50→    created_at: datetime = field(default_factory=datetime.utcnow)
+    51→    51→    updated_at: datetime = field(default_factory=datetime.utcnow)
+    52→    52→
+    53→    53→    def mute(self) -> None:
+    54→    54→        if self.status == ChatStatus.BLOCKED:
+    55→    55→            raise ChatAlreadyClosedError("Cannot mute a blocked chat")
+    56→    56→        self.status = ChatStatus.MUTED
+    57→    57→        self.updated_at = datetime.utcnow()
+    58→    58→
+    59→    59→    def unmute(self) -> None:
+    60→    60→        if self.status != ChatStatus.MUTED:
+    61→    61→            raise ValueError("Chat is not muted")
+    62→    62→        self.status = ChatStatus.ACTIVE
+    63→    63→        self.updated_at = datetime.utcnow()
+    64→    64→
+    65→    65→    def block(self) -> None:
+    66→    66→        if self.status == ChatStatus.BLOCKED:
+    67→    67→            raise ChatAlreadyClosedError("Chat is already blocked")
+    68→    68→        self.status = ChatStatus.BLOCKED
+    69→    69→        self.updated_at = datetime.utcnow()
+    70→    70→
+    71→    71→    def is_group_chat(self) -> bool:
+    72→    72→        return self.chat_type in (ChatType.GROUP, ChatType.SUPERGROUP)
+    73→    73→
+    74→    74→    def set_language(self, language: Language) -> None:
+    75→    75→        self.language = language
+    76→    76→        self.updated_at = datetime.utcnow()
+    77→    77→```
+    78→    78→
+    79→    79→```python
+    80→    80→# domain/entities/conversation.py
+    81→    81→from dataclasses import dataclass, field
+    82→    82→from datetime import datetime
+    83→    83→from uuid import UUID, uuid4
+    84→    84→
+    85→    85→from domain.exceptions.domain_exceptions import (
+    86→    86→    ConversationAlreadyEndedError,
+    87→    87→    MessageLimitExceededError,
+    88→    88→)
+    89→    89→
+    90→    90→
+    91→    91→@dataclass
+    92→    92→class Conversation:
+    93→    93→    """Aggregate-like entity for an AI conversation session."""
+    94→    94→    id: UUID = field(default_factory=uuid4)
+    95→    95→    user_telegram_id: int = 0
+    96→    96→    is_active: bool = True
+    97→    97→    message_count: int = 0
+    98→    98→    max_messages: int = 100
+    99→    99→    created_at: datetime = field(default_factory=datetime.utcnow)
+   100→   100→    ended_at: datetime | None = None
+   101→   101→
+   102→   102→    def add_message(self) -> None:
+   103→   103→        if not self.is_active:
+   104→   104→            raise ConversationAlreadyEndedError("Cannot add messages to ended conversation")
+   105→   105→        if self.message_count >= self.max_messages:
+   106→   106→            raise MessageLimitExceededError(
+   107→   107→                f"Message limit of {self.max_messages} exceeded"
+   108→   108→            )
+   109→   109→        self.message_count += 1
+   110→   110→
+   111→   111→    def end(self) -> None:
+   112→   112→        if not self.is_active:
+   113→   113→            raise ConversationAlreadyEndedError("Conversation is already ended")
+   114→   114→        self.is_active = False
+   115→   115→        self.ended_at = datetime.utcnow()
+   116→   116→
+   117→   117→    def remaining_messages(self) -> int:
+   118→   118→        return max(0, self.max_messages - self.message_count)
+   119→   119→```
+   120→   120→
+   121→   121→### Value Objects
+   122→   122→
+   123→   123→Value objects have no identity — they are defined entirely by their attributes. Two `TelegramId` objects with the same value are identical. Value objects are immutable and enforce validation at creation time.
+   124→   124→
+   125→   125→```python
+   126→   126→# domain/value_objects/telegram_id.py
+   127→   127→from dataclasses import dataclass
+   128→   128→
+   129→   129→
+   130→   130→@dataclass(frozen=True)
+   131→   131→class TelegramId:
+   132→   132→    """Immutable value object representing a Telegram user/chat ID."""
+   133→   133→    value: int
+   134→   134→
+   135→   135→    def __post_init__(self) -> None:
+   136→   136→        if not isinstance(self.value, int):
+   137→   137→            raise TypeError("Telegram ID must be an integer")
+   138→   138→        if self.value <= 0:
+   139→   139→            raise ValueError("Telegram ID must be a positive integer")
+   140→   140→
+   141→   141→    def __int__(self) -> int:
+   142→   142→        return self.value
+   143→   143→
+   144→   144→    def __str__(self) -> str:
+   145→   145→        return str(self.value)
+   146→   146→```
+   147→   147→
+   148→   148→```python
+   149→   149→# domain/value_objects/message_text.py
+   150→   150→from dataclasses import dataclass
+   151→   151→
+   152→   152→
+   153→   153→@dataclass(frozen=True)
+   154→   154→class MessageText:
+   155→   155→    """Immutable value object for validated message text."""
+   156→   156→    value: str
+   157→   157→
+   158→   158→    MAX_LENGTH = 4096  # Telegram message limit
+   159→   159→
+   160→   160→    def __post_init__(self) -> None:
+   161→   161→        if not isinstance(self.value, str):
+   162→   162→            raise TypeError("Message text must be a string")
+   163→   163→        if len(self.value) == 0:
+   164→   164→            raise ValueError("Message text cannot be empty")
+   165→   165→        if len(self.value) > self.MAX_LENGTH:
+   166→   166→            raise ValueError(
+   167→   167→                f"Message text exceeds Telegram limit of {self.MAX_LENGTH} characters"
+   168→   168→            )
+   169→   169→
+   170→   170→    def truncate(self, max_length: int = 200) -> "MessageText":
+   171→   171→        if len(self.value) <= max_length:
+   172→   172→            return self
+   173→   173→        return MessageText(self.value[: max_length - 3] + "...")
+   174→   174→
+   175→   175→    def __str__(self) -> str:
+   176→   176→        return self.value
+   177→   177→```
+   178→   178→
+   179→   179→```python
+   180→   180→# domain/value_objects/language.py
+   181→   181→from dataclasses import dataclass
+   182→   182→from enum import Enum
+   183→   183→
+   184→   184→
+   185→   185→class LanguageCode(Enum):
+   186→   186→    EN = "en"
+   187→   187→    RU = "ru"
+   188→   188→    DE = "de"
+   189→   189→    FR = "fr"
+   190→   190→    ES = "es"
+   191→   191→    ZH = "zh"
+   192→   192→    JA = "ja"
+   193→   193→    KO = "ko"
+   194→   194→
+   195→   195→
+   196→   196→@dataclass(frozen=True)
+   197→   197→class Language:
+   198→   198→    """Immutable value object representing a language preference."""
+   199→   199→    code: LanguageCode = LanguageCode.EN
+   200→   200→
+   201→   201→    @classmethod
+   202→   202→    def from_iso(cls, iso_code: str) -> "Language":
+   203→   203→        try:
+   204→   204→            return cls(code=LanguageCode(iso_code.lower()))
+   205→   205→        except ValueError:
+   206→   206→            raise ValueError(f"Unsupported language code: {iso_code}")
+   207→   207→
+   208→   208→    @property
+   209→   209→    def display_name(self) -> str:
+   210→   210→        names = {
+   211→   211→            LanguageCode.EN: "English",
+   212→   212→            LanguageCode.RU: "Русский",
+   213→   213→            LanguageCode.DE: "Deutsch",
+   214→   214→            LanguageCode.FR: "Français",
+   215→   215→            LanguageCode.ES: "Español",
+   216→   216→            LanguageCode.ZH: "中文",
+   217→   217→            LanguageCode.JA: "日本語",
+   218→   218→            LanguageCode.KO: "한국어",
+   219→   219→        }
+   220→   220→        return names[self.code]
+   221→   221→```
+   222→   222→
+   223→   223→### Domain Events
+   224→   224→
+   225→   225→Domain events represent significant state changes that other parts of the system may need to react to. They are defined in the domain layer but published by the application layer.
+   226→   226→
+   227→   227→```python
+   228→   228→# domain/events/domain_events.py
+   229→   229→from dataclasses import dataclass, field
+   230→   230→from datetime import datetime
+   231→   231→from uuid import UUID
+   232→   232→
+   233→   233→
+   234→   234→@dataclass
+   235→   235→class DomainEvent:
+   236→   236→    """Base class for all domain events."""
+   237→   237→    occurred_at: datetime = field(default_factory=datetime.utcnow)
+   238→   238→
+   239→   239→
+   240→   240→@dataclass
+   241→   241→class UserRegistered(DomainEvent):
+   242→   242→    """Fired when a new user registers via the bot."""
+   243→   243→    user_id: UUID = field(default=None)
+   244→   244→    telegram_id: int = 0
+   245→   245→    username: str = ""
+   246→   246→
+   247→   247→
+   248→   248→@dataclass
+   249→   249→class ConversationStarted(DomainEvent):
+   250→   250→    """Fired when a user starts a new AI conversation."""
+   251→   251→    conversation_id: UUID = field(default=None)
+   252→   252→    user_telegram_id: int = 0
+   253→   253→
+   254→   254→
+   255→   255→@dataclass
+   256→   256→class ConversationEnded(DomainEvent):
+   257→   257→    """Fired when a conversation ends."""
+   258→   258→    conversation_id: UUID = field(default=None)
+   259→   259→    user_telegram_id: int = 0
+   260→   260→    message_count: int = 0
+   261→   261→
+   262→   262→
+   263→   263→@dataclass
+   264→   264→class MessageSentToLLM(DomainEvent):
+   265→   265→    """Fired when a message is sent to the LLM for processing."""
+   266→   266→    conversation_id: UUID = field(default=None)
+   267→   267→    user_telegram_id: int = 0
+   268→   268→    token_count: int = 0
+   269→   269→
+   270→   270→
+   271→   271→@dataclass
+   272→   272→class UserBlockedBot(DomainEvent):
+   273→   273→    """Fired when a user blocks the bot (detected via failed message delivery)."""
+   274→   274→    telegram_id: int = 0
+   275→   275→```
+   276→   276→
+   277→   277→---
+   278→   278→
+   279→   279→## Application Layer
+   280→   280→
+   281→   281→The Application Layer contains use cases, their input/output DTOs, and the port interfaces they depend on. This layer orchestrates the flow of data: it receives input from controllers, delegates work to entities and repositories, and returns structured output. It contains no business rules itself — those live in entities — but it encodes the application's workflow.
+   282→   282→
+   283→   283→### Use Cases
+   284→   284→
+   285→   285→Each use case represents a single application operation. It declares its dependencies as abstract interfaces (ports) and operates purely through those interfaces.
+   286→   286→
+   287→   287→```python
+   288→   288→# application/use_cases/start_conversation.py
+   289→   289→from abc import ABC, abstractmethod
+   290→   290→from dataclasses import dataclass
+   291→   291→from uuid import UUID
+   292→   292→
+   293→   293→from domain.entities.conversation import Conversation
+   294→   294→from domain.events.domain_events import ConversationStarted
+   295→   295→
+   296→   296→
+   297→   297→@dataclass
+   298→   298→class StartConversationRequest:
+   299→   299→    """Input DTO for starting a conversation."""
+   300→   300→    user_telegram_id: int
+   301→   301→    initial_message: str | None = None
+   302→   302→
+   303→   303→
+   304→   304→@dataclass
+   305→   305→class StartConversationResponse:
+   306→   306→    """Output DTO for starting a conversation."""
+   307→   307→    conversation_id: UUID
+   308→   308→    is_resumed: bool
+   309→   309→    remaining_messages: int
+   310→   310→
+   311→   311→
+   312→   312→class ConversationRepository(ABC):
+   313→   313→    """Port: persistence for conversation entities."""
+   314→   314→    @abstractmethod
+   315→   315→    async def get_active_by_user(self, telegram_id: int) -> Conversation | None: ...
+   316→   316→
+   317→   317→    @abstractmethod
+   318→   318→    async def save(self, conversation: Conversation) -> Conversation: ...
+   319→   319→
+   320→   320→
+   321→   321→class EventPublisher(ABC):
+   322→   322→    """Port: publishes domain events to the event bus."""
+   323→   323→    @abstractmethod
+   324→   324→    async def publish(self, event: DomainEvent) -> None: ...
+   325→   325→
+   326→   326→
+   327→   327→class StartConversationUseCase:
+   328→   328→    """Starts a new AI conversation or resumes an existing active one."""
+   329→   329→
+   330→   330→    def __init__(
+   331→   331→        self,
+   332→   332→        conversation_repo: ConversationRepository,
+   333→   333→        event_publisher: EventPublisher,
+   334→   334→    ) -> None:
+   335→   335→        self._conversation_repo = conversation_repo
+   336→   336→        self._event_publisher = event_publisher
+   337→   337→
+   338→   338→    async def execute(self, request: StartConversationRequest) -> StartConversationResponse:
+   339→   339→        active = await self._conversation_repo.get_active_by_user(
+   340→   340→            request.user_telegram_id
+   341→   341→        )
+   342→   342→        if active is not None:
+   343→   343→            return StartConversationResponse(
+   344→   344→                conversation_id=active.id,
+   345→   345→                is_resumed=True,
+   346→   346→                remaining_messages=active.remaining_messages(),
+   347→   347→            )
+   348→   348→
+   349→   349→        conversation = Conversation(user_telegram_id=request.user_telegram_id)
+   350→   350→        if request.initial_message:
+   351→   351→            conversation.add_message()
+   352→   352→
+   353→   353→        saved = await self._conversation_repo.save(conversation)
+   354→   354→
+   355→   355→        await self._event_publisher.publish(
+   356→   356→            ConversationStarted(
+   357→   357→                conversation_id=saved.id,
+   358→   358→                user_telegram_id=request.user_telegram_id,
+   359→   359→            )
+   360→   360→        )
+   361→   361→
+   362→   362→        return StartConversationResponse(
+   363→   363→            conversation_id=saved.id,
+   364→   364→            is_resumed=False,
+   365→   365→            remaining_messages=saved.remaining_messages(),
+   366→   366→        )
+   367→   367→```
+   368→   368→
+   369→   369→```python
+   370→   370→# application/use_cases/send_ai_message.py
+   371→   371→from abc import ABC, abstractmethod
+   372→   372→from dataclasses import dataclass
+   373→   373→from uuid import UUID
+   374→   374→
+   375→   375→from domain.entities.conversation import Conversation
+   376→   376→from domain.value_objects.message_text import MessageText
+   377→   377→from domain.events.domain_events import MessageSentToLLM
+   378→   378→
+   379→   379→
+   380→   380→@dataclass
+   381→   381→class SendAIMessageRequest:
+   382→   382→    conversation_id: UUID
+   383→   383→    user_telegram_id: int
+   384→   384→    message_text: str
+   385→   385→
+   386→   386→
+   387→   387→@dataclass
+   388→   388→class SendAIMessageResponse:
+   389→   389→    ai_response: str
+   390→   390→    conversation_id: UUID
+   391→   391→    remaining_messages: int
+   392→   392→
+   393→   393→
+   394→   394→class LLMService(ABC):
+   395→   395→    """Port: abstract interface for language model interaction."""
+   396→   396→    @abstractmethod
+   397→   397→    async def generate_response(
+   398→   398→        self,
+   399→   399→        conversation_id: UUID,
+   400→   400→        user_message: str,
+   401→   401→    ) -> str: ...
+   402→   402→
+   403→   403→
+   404→   404→class SendAIMessageUseCase:
+   405→   405→    """Processes a user message through the AI and returns the response."""
+   406→   406→
+   407→   407→    def __init__(
+   408→   408→        self,
+   409→   409→        conversation_repo: ConversationRepository,
+   410→   410→        llm_service: LLMService,
+   411→   411→        event_publisher: EventPublisher,
+   412→   412→    ) -> None:
+   413→   413→        self._conversation_repo = conversation_repo
+   414→   414→        self._llm_service = llm_service
+   415→   415→        self._event_publisher = event_publisher
+   416→   416→
+   417→   417→    async def execute(self, request: SendAIMessageRequest) -> SendAIMessageResponse:
+   418→   418→        conversation = await self._conversation_repo.get_by_id(request.conversation_id)
+   419→   419→        if conversation is None:
+   420→   420→            raise ValueError(f"Conversation {request.conversation_id} not found")
+   421→   421→
+   422→   422→        message = MessageText(request.message_text)
+   423→   423→        conversation.add_message()
+   424→   424→
+   425→   425→        ai_response = await self._llm_service.generate_response(
+   426→   426→            conversation_id=conversation.id,
+   427→   427→            user_message=message.value,
+   428→   428→        )
+   429→   429→
+   430→   430→        await self._conversation_repo.save(conversation)
+   431→   431→
+   432→   432→        await self._event_publisher.publish(
+   433→   433→            MessageSentToLLM(
+   434→   434→                conversation_id=conversation.id,
+   435→   435→                user_telegram_id=request.user_telegram_id,
+   436→   436→                token_count=len(message.value.split()),  # rough estimate
+   437→   437→            )
+   438→   438→        )
+   439→   439→
+   440→   440→        return SendAIMessageResponse(
+   441→   441→            ai_response=ai_response,
+   442→   442→            conversation_id=conversation.id,
+   443→   443→            remaining_messages=conversation.remaining_messages(),
+   444→   444→        )
+   445→   445→```
+   446→   446→
+   447→   447→### DTOs (Data Transfer Objects)
+   448→   448→
+   449→   449→DTOs are flat data structures that carry data across layer boundaries. They contain no business logic — only fields and optionally validation metadata.
+   450→   450→
+   451→   451→```python
+   452→   452→# application/dtos/user_dtos.py
+   453→   453→from dataclasses import dataclass
+   454→   454→from enum import Enum
+   455→   455→
+   456→   456→
+   457→   457→class UserStatusDTO(Enum):
+   458→   458→    ACTIVE = "active"
+   459→   459→    INACTIVE = "inactive"
+   460→   460→    BANNED = "banned"
+   461→   461→
+   462→   462→
+   463→   463→@dataclass
+   464→   464→class UserProfileDTO:
+   465→   465→    """Read-only projection of user data for presentation."""
+   466→   466→    user_id: int
+   467→   467→    telegram_id: int
+   468→   468→    username: str
+   469→   469→    role: str
+   470→   470→    status: UserStatusDTO
+   471→   471→    conversation_count: int
+   472→   472→    total_messages: int
+   473→   473→    registered_at: str
+   474→   474→
+   475→   475→
+   476→   476→@dataclass
+   477→   477→class UserListDTO:
+   478→   478→    """Paginated user list for admin views."""
+   479→   479→    users: list[UserProfileDTO]
+   480→   480→    total_count: int
+   481→   481→    page: int
+   482→   482→    per_page: int
+   483→   483→    has_next: bool
+   484→   484→```
+   485→   485→
+   486→   486→### Ports
+   487→   487→
+   488→   488→Ports are abstract interfaces defined by the application layer. They represent the operations the application needs from the outside world. There are two kinds:
+   489→   489→
+   490→   490→- **Driven ports** (secondary): Interfaces the application uses to interact with external systems (databases, LLMs, event buses)
+   491→   491→- **Driving ports** (primary): Interfaces through which external actors invoke the application (less common in Python, more explicit in Java/Spring)
+   492→   492→
+   493→   493→```python
+   494→   494→# application/ports/repositories.py
+   495→   495→from abc import ABC, abstractmethod
+   496→   496→from uuid import UUID
+   497→   497→
+   498→   498→from domain.entities.user import User
+   499→   499→from domain.entities.chat import Chat
+   500→   500→from domain.entities.conversation import Conversation
+   501→   501→
+   502→   502→
+   503→   503→class UserRepository(ABC):
+   504→   504→    """Driven port for user persistence."""
+   505→   505→
+   506→   506→    @abstractmethod
+   507→   507→    async def get_by_id(self, user_id: int) -> User | None: ...
+   508→   508→
+   509→   509→    @abstractmethod
+   510→   510→    async def get_by_telegram_id(self, telegram_id: int) -> User | None: ...
+   511→   511→
+   512→   512→    @abstractmethod
+   513→   513→    async def save(self, user: User) -> User: ...
+   514→   514→
+   515→   515→    @abstractmethod
+   516→   516→    async def get_all_active(self, offset: int, limit: int) -> list[User]: ...
+   517→   517→
+   518→   518→    @abstractmethod
+   519→   519→    async def count_active(self) -> int: ...
+   520→   520→
+   521→   521→
+   522→   522→class ChatRepository(ABC):
+   523→   523→    """Driven port for chat persistence."""
+   524→   524→
+   525→   525→    @abstractmethod
+   526→   526→    async def get_by_telegram_id(self, telegram_id: int) -> Chat | None: ...
+   527→   527→
+   528→   528→    @abstractmethod
+   529→   529→    async def save(self, chat: Chat) -> Chat: ...
+   530→   530→
+   531→   531→
+   532→   532→class ConversationRepository(ABC):
+   533→   533→    """Driven port for conversation persistence."""
+   534→   534→
+   535→   535→    @abstractmethod
+   536→   536→    async def get_by_id(self, conversation_id: UUID) -> Conversation | None: ...
+   537→   537→
+   538→   538→    @abstractmethod
+   539→   539→    async def get_active_by_user(self, telegram_id: int) -> Conversation | None: ...
+   540→   540→
+   541→   541→    @abstractmethod
+   542→   542→    async def save(self, conversation: Conversation) -> Conversation: ...
+   543→   543→
+   544→   544→    @abstractmethod
+   545→   545→    async def count_by_user(self, telegram_id: int) -> int: ...
+   546→   546→```
+   547→   547→
+   548→   548→---
+   549→   549→
+   550→   550→## Infrastructure Layer
+   551→   551→
+   552→   552→The Infrastructure Layer provides concrete implementations of the ports defined by the application layer. It contains all code that interacts with external systems: databases, message queues, LLM APIs, Redis, and the Telegram Bot API itself.
+   553→   553→
+   554→   554→### Repository Implementations
+   555→   555→
+   556→   556→```python
+   557→   557→# adapters/database/user_repository.py
+   558→   558→from sqlalchemy.ext.asyncio import AsyncSession
+   559→   559→from sqlalchemy import select, func
+   560→   560→
+   561→   561→from application.ports.repositories import UserRepository
+   562→   562→from domain.entities.user import User, UserRole
+   563→   563→from adapters.database.models import UserModel
+   564→   564→
+   565→   565→
+   566→   566→class SQLAlchemyUserRepository(UserRepository):
+   567→   567→    """Concrete implementation of UserRepository using SQLAlchemy."""
+   568→   568→
+   569→   569→    def __init__(self, session: AsyncSession) -> None:
+   570→   570→        self._session = session
+   571→   571→
+   572→   572→    async def get_by_id(self, user_id: int) -> User | None:
+   573→   573→        result = await self._session.execute(
+   574→   574→            select(UserModel).where(UserModel.id == user_id)
+   575→   575→        )
+   576→   576→        row = result.scalar_one_or_none()
+   577→   577→        return self._to_entity(row) if row else None
+   578→   578→
+   579→   579→    async def get_by_telegram_id(self, telegram_id: int) -> User | None:
+   580→   580→        result = await self._session.execute(
+   581→   581→            select(UserModel).where(UserModel.telegram_id == telegram_id)
+   582→   582→        )
+   583→   583→        row = result.scalar_one_or_none()
+   584→   584→        return self._to_entity(row) if row else None
+   585→   585→
+   586→   586→    async def save(self, user: User) -> User:
+   587→   587→        if user.id == 0:
+   588→   588→            model = UserModel(
+   589→   589→                telegram_id=user.telegram_id,
+   590→   590→                username=user.username,
+   591→   591→                role=user.role.value,
+   592→   592→                is_active=user.is_active,
+   593→   593→            )
+   594→   594→            self._session.add(model)
+   595→   595→            await self._session.flush()
+   596→   596→            return self._to_entity(model)
+   597→   597→        else:
+   598→   598→            result = await self._session.execute(
+   599→   599→                select(UserModel).where(UserModel.id == user.id)
+   600→   600→            )
+   601→   601→            model = result.scalar_one()
+   602→   602→            model.username = user.username
+   603→   603→            model.role = user.role.value
+   604→   604→            model.is_active = user.is_active
+   605→   605→            await self._session.flush()
+   606→   606→            return self._to_entity(model)
+   607→   607→
+   608→   608→    async def get_all_active(self, offset: int, limit: int) -> list[User]:
+   609→   609→        result = await self._session.execute(
+   610→   610→            select(UserModel)
+   611→   611→            .where(UserModel.is_active == True)
+   612→   612→            .offset(offset)
+   613→   613→            .limit(limit)
+   614→   614→        )
+   615→   615→        return [self._to_entity(row) for row in result.scalars().all()]
+   616→   616→
+   617→   617→    async def count_active(self) -> int:
+   618→   618→        result = await self._session.execute(
+   619→   619→            select(func.count()).where(UserModel.is_active == True)
+   620→   620→        )
+   621→   621→        return result.scalar_one()
+   622→   622→
+   623→   623→    @staticmethod
+   624→   624→    def _to_entity(model: UserModel) -> User:
+   625→   625→        return User(
+   626→   626→            id=model.id,
+   627→   627→            telegram_id=model.telegram_id,
+   628→   628→            username=model.username,
+   629→   629→            role=UserRole(model.role),
+   630→   630→            is_active=model.is_active,
+   631→   631→            created_at=model.created_at,
+   632→   632→        )
+   633→   633→```
+   634→   634→
+   635→   635→### LLM Service Implementation
+   636→   636→
+   637→   637→```python
+   638→   638→# adapters/llm/openai_service.py
+   639→   639→from uuid import UUID
+   640→   640→import openai
+   641→   641→
+   642→   642→from application.use_cases.send_ai_message import LLMService
+   643→   643→
+   644→   644→
+   645→   645→class OpenAILLMService(LLMService):
+   646→   646→    """Concrete implementation of LLMService using OpenAI API."""
+   647→   647→
+   648→   648→    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
+   649→   649→        self._client = openai.AsyncOpenAI(api_key=api_key)
+   650→   650→        self._model = model
+   651→   651→        self._conversation_history: dict[UUID, list[dict]] = {}
+   652→   652→
+   653→   653→    async def generate_response(
+   654→   654→        self,
+   655→   655→        conversation_id: UUID,
+   656→   656→        user_message: str,
+   657→   657→    ) -> str:
+   658→   658→        if conversation_id not in self._conversation_history:
+   659→   659→            self._conversation_history[conversation_id] = [
+   660→   660→                {"role": "system", "content": "You are a helpful Telegram bot assistant."}
+   661→   661→            ]
+   662→   662→
+   663→   663→        self._conversation_history[conversation_id].append(
+   664→   664→            {"role": "user", "content": user_message}
+   665→   665→        )
+   666→   666→
+   667→   667→        response = await self._client.chat.completions.create(
+   668→   668→            model=self._model,
+   669→   669→            messages=self._conversation_history[conversation_id],
+   670→   670→            max_tokens=2048,
+   671→   671→            temperature=0.7,
+   672→   672→        )
+   673→   673→
+   674→   674→        assistant_message = response.choices[0].message.content
+   675→   675→        self._conversation_history[conversation_id].append(
+   676→   676→            {"role": "assistant", "content": assistant_message}
+   677→   677→        )
+   678→   678→
+   679→   679→        return assistant_message
+   680→   680→```
+   681→   681→
+   682→   682→### Event Publisher Implementation
+   683→   683→
+   684→   684→```python
+   685→   685→# adapters/events/redis_event_publisher.py
+   686→   686→from domain.events.domain_events import DomainEvent
+   687→   687→from application.use_cases.start_conversation import EventPublisher
+   688→   688→import json
+   689→   689→from redis.asyncio import Redis
+   690→   690→
+   691→   691→
+   692→   692→class RedisEventPublisher(EventPublisher):
+   693→   693→    """Publishes domain events to Redis pub/sub channels."""
+   694→   694→
+   695→   695→    def __init__(self, redis: Redis) -> None:
+   696→   696→        self._redis = redis
+   697→   697→
+   698→   698→    async def publish(self, event: DomainEvent) -> None:
+   699→   699→        channel = f"events:{type(event).__name__}"
+   700→   700→        payload = {
+   701→   701→            "event_type": type(event).__name__,
+   702→   702→            "occurred_at": event.occurred_at.isoformat(),
+   703→   703→            "data": {
+   704→   704→                k: str(v) for k, v in event.__dict__.items()
+   705→   705→                if k != "occurred_at"
+   706→   706→            },
+   707→   707→        }
+   708→   708→        await self._redis.publish(channel, json.dumps(payload))
+   709→   709→```
+   710→   710→
+   711→   711→---
+   712→   712→
+   713→   713→## Presentation Layer
+   714→   714→
+   715→   715→The Presentation Layer contains the controllers (aiogram handlers), presenters (response formatters), keyboards, and filters. This layer is the bridge between the Telegram Bot API and your application's use cases.
+   716→   716→
+   717→   717→### Controllers (Message/Callback Handlers)
+   718→   718→
+   719→   719→Controllers are thin — they parse incoming Telegram updates, call use cases, and delegate response formatting to presenters.
+   720→   720→
+   721→   721→```python
+   722→   722→# adapters/telegram/controllers/chat_controller.py
+   723→   723→from aiogram import Router
+   724→   724→from aiogram.types import Message, CallbackQuery
+   725→   725→from aiogram.filters import Command
+   726→   726→
+   727→   727→from application.use_cases.start_conversation import (
+   728→   728→    StartConversationUseCase,
+   729→   729→    StartConversationRequest,
+   730→   730→)
+   731→   731→from application.use_cases.send_ai_message import (
+   732→   732→    SendAIMessageUseCase,
+   733→   733→    SendAIMessageRequest,
+   734→   734→)
+   735→   735→from adapters.telegram.presenters.chat_presenter import ChatPresenter
+   736→   736→
+   737→   737→
+   738→   738→router = Router()
+   739→   739→
+   740→   740→
+   741→   741→@router.message(Command("chat"))
+   742→   742→async def start_conversation(
+   743→   743→    message: Message,
+   744→   744→    start_conversation_use_case: StartConversationUseCase,
+   745→   745→) -> None:
+   746→   746→    """Controller: starts a new AI conversation."""
+   747→   747→    request = StartConversationRequest(
+   748→   748→        user_telegram_id=message.from_user.id,
+   749→   749→    )
+   750→   750→    response = await start_conversation_use_case.execute(request)
+   751→   751→
+   752→   752→    presenter = ChatPresenter()
+   753→   753→    text = presenter.format_conversation_start(response)
+   754→   754→    keyboard = presenter.build_conversation_keyboard(response)
+   755→   755→
+   756→   756→    await message.answer(text, reply_markup=keyboard)
+   757→   757→
+   758→   758→
+   759→   759→@router.message()
+   760→   760→async def handle_chat_message(
+   761→   761→    message: Message,
+   762→   762→    send_ai_message_use_case: SendAIMessageUseCase,
+   763→   763→    active_conversation_id: str | None,
+   764→   764→) -> None:
+   765→   765→    """Controller: processes a user message in an active AI conversation."""
+   766→   766→    if not active_conversation_id:
+   767→   767→        await message.answer(
+   768→   768→            "No active conversation. Use /chat to start one."
+   769→   769→        )
+   770→   770→        return
+   771→   771→
+   772→   772→    request = SendAIMessageRequest(
+   773→   773→        conversation_id=active_conversation_id,
+   774→   774→        user_telegram_id=message.from_user.id,
+   775→   775→        message_text=message.text,
+   776→   776→    )
+   777→   777→
+   778→   778→    response = await send_ai_message_use_case.execute(request)
+   779→   779→
+   780→   780→    presenter = ChatPresenter()
+   781→   781→    text = presenter.format_ai_response(response)
+   782→   782→    await message.answer(text)
+   783→   783→```
+   784→   784→
+   785→   785→### Presenters (Response Formatters)
+   786→   786→
+   787→   787→Presenters transform use case responses into human-readable Telegram messages. They handle markdown formatting, emoji, and keyboard layout.
+   788→   788→
+   789→   789→```python
+   790→   790→# adapters/telegram/presenters/chat_presenter.py
+   791→   791→from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+   792→   792→
+   793→   793→from application.use_cases.start_conversation import StartConversationResponse
+   794→   794→from application.use_cases.send_ai_message import SendAIMessageResponse
+   795→   795→
+   796→   796→
+   797→   797→class ChatPresenter:
+   798→   798→    """Formats AI chat responses for Telegram display."""
+   799→   799→
+   800→   800→    def format_conversation_start(self, response: StartConversationResponse) -> str:
+   801→   801→        if response.is_resumed:
+   802→   802→            return (
+   803→   803→                "💬 *Conversation Resumed*\n\n"
+   804→   804→                f"Remaining messages: {response.remaining_messages}\n"
+   805→   805→                "Type your message to continue."
+   806→   806→            )
+   807→   807→        return (
+   808→   808→            "💬 *New Conversation Started*\n\n"
+   809→   809→            "I'm ready to chat! Ask me anything.\n"
+   810→   810→            f"You have {response.remaining_messages} messages available.\n"
+   811→   811→            "Use /end to close this conversation."
+   812→   812→        )
+   813→   813→
+   814→   814→    def build_conversation_keyboard(
+   815→   815→        self, response: StartConversationResponse
+   816→   816→    ) -> InlineKeyboardMarkup:
+   817→   817→        buttons = [
+   818→   818→            [
+   819→   819→                InlineKeyboardButton(
+   820→   820→                    text="🔚 End Conversation",
+   821→   821→                    callback_data=f"end_conversation:{response.conversation_id}",
+   822→   822→                )
+   823→   823→            ],
+   824→   824→        ]
+   825→   825→        if response.remaining_messages > 10:
+   826→   826→            buttons.append([
+   827→   827→                InlineKeyboardButton(
+   828→   828→                    text="⚙️ Settings",
+   829→   829→                    callback_data="conversation_settings",
+   830→   830→                )
+   831→   831→            ])
+   832→   832→        return InlineKeyboardMarkup(inline_keyboard=buttons)
+   833→   833→
+   834→   834→    def format_ai_response(self, response: SendAIMessageResponse) -> str:
+   835→   835→        footer = f"\n\n_Messages remaining: {response.remaining_messages}_"
+   836→   836→        if len(response.ai_response) + len(footer) > 4096:
+   837→   837→            return response.ai_response[:4090 - len(footer)] + "..." + footer
+   838→   838→        return response.ai_response + footer
+   839→   839→```
+   840→   840→
+   841→   841→### Keyboards
+   842→   842→
+   843→   843→```python
+   844→   844→# adapters/telegram/keyboards/inline_keyboards.py
+   845→   845→from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+   846→   846→
+   847→   847→
+   848→   848→def admin_panel_keyboard() -> InlineKeyboardMarkup:
+   849→   849→    return InlineKeyboardMarkup(inline_keyboard=[
+   850→   850→        [
+   851→   851→            InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
+   852→   852→            InlineKeyboardButton(text="👥 Users", callback_data="admin:users"),
+   853→   853→        ],
+   854→   854→        [
+   855→   855→            InlineKeyboardButton(text="📢 Broadcast", callback_data="admin:broadcast"),
+   856→   856→            InlineKeyboardButton(text="⚙️ Settings", callback_data="admin:settings"),
+   857→   857→        ],
+   858→   858→        [
+   859→   859→            InlineKeyboardButton(text="🔙 Back", callback_data="admin:back"),
+   860→   860→        ],
+   861→   861→    ])
+   862→   862→
+   863→   863→
+   864→   864→def language_selector_keyboard() -> InlineKeyboardMarkup:
+   865→   865→    return InlineKeyboardMarkup(inline_keyboard=[
+   866→   866→        [
+   867→   867→            InlineKeyboardButton(text="🇬🇧 English", callback_data="lang:en"),
+   868→   868→            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang:ru"),
+   869→   869→        ],
+   870→   870→        [
+   871→   871→            InlineKeyboardButton(text="🇩🇪 Deutsch", callback_data="lang:de"),
+   872→   872→            InlineKeyboardButton(text="🇫🇷 Français", callback_data="lang:fr"),
+   873→   873→        ],
+   874→   874→    ])
+   875→   875→
+   876→   876→
+   877→   877→def paginated_list_keyboard(
+   878→   878→    items: list[tuple[str, str]],
+   879→   879→    page: int,
+   880→   880→    has_next: bool,
+   881→   881→    has_prev: bool,
+   882→   882→    prefix: str = "list",
+   883→   883→) -> InlineKeyboardMarkup:
+   884→   884→    buttons = [
+   885→   885→        [InlineKeyboardButton(text=label, callback_data=f"{prefix}:{data}")]
+   886→   886→        for label, data in items
+   887→   887→    ]
+   888→   888→    nav = []
+   889→   889→    if has_prev:
+   890→   890→        nav.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"{prefix}:page:{page-1}"))
+   891→   891→    if has_next:
+   892→   892→        nav.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"{prefix}:page:{page+1}"))
+   893→   893→    if nav:
+   894→   894→        buttons.append(nav)
+   895→   895→    return InlineKeyboardMarkup(inline_keyboard=buttons)
+   896→   896→```
+   897→   897→
+   898→   898→---
+   899→   899→
+   900→   900→## Cross-Cutting Concerns
+   901→   901→
+   902→   902→Cross-cutting concerns are aspects of the application that span multiple layers. In a Clean Architecture Telegram bot, these include logging, error handling, dependency injection, and configuration.
+   903→   903→
+   904→   904→### Logging
+   905→   905→
+   906→   906→Logging must be structured and consistent. Define a logging protocol in the application layer and implement it in infrastructure.
+   907→   907→
+   908→   908→```python
+   909→   909→# application/ports/logger.py
+   910→   910→from abc import ABC, abstractmethod
+   911→   911→from typing import Any
+   912→   912→
+   913→   913→
+   914→   914→class AppLogger(ABC):
+   915→   915→    """Application-level logging port."""
+   916→   916→
+   917→   917→    @abstractmethod
+   918→   918→    def info(self, message: str, **kwargs: Any) -> None: ...
+   919→   919→
+   920→   920→    @abstractmethod
+   921→   921→    def error(self, message: str, **kwargs: Any) -> None: ...
+   922→   922→
+   923→   923→    @abstractmethod
+   924→   924→    def warning(self, message: str, **kwargs: Any) -> None: ...
+   925→   925→
+   926→   926→    @abstractmethod
+   927→   927→    def debug(self, message: str, **kwargs: Any) -> None: ...
+   928→   928→
+   929→   929→
+   930→   930→# infrastructure/logging/logger.py
+   931→   931→import logging
+   932→   932→import structlog
+   933→   933→
+   934→   934→
+   935→   935→class StructlogLogger(AppLogger):
+   936→   936→    """Concrete logger using structlog for structured JSON output."""
+   937→   937→
+   938→   938→    def __init__(self, service_name: str) -> None:
+   939→   939→        structlog.configure(
+   940→   940→            processors=[
+   941→   941→                structlog.contextvars.merge_contextvars,
+   942→   942→                structlog.processors.add_log_level,
+   943→   943→                structlog.processors.TimeStamper(fmt="iso"),
+   944→   944→                structlog.processors.JSONRenderer(),
+   945→   945→            ],
+   946→   946→        )
+   947→   947→        self._logger = structlog.get_logger(service=service_name)
+   948→   948→
+   949→   949→    def info(self, message: str, **kwargs: Any) -> None:
+   950→   950→        self._logger.info(message, **kwargs)
+   951→   951→
+   952→   952→    def error(self, message: str, **kwargs: Any) -> None:
+   953→   953→        self._logger.error(message, **kwargs)
+   954→   954→
+   955→   955→    def warning(self, message: str, **kwargs: Any) -> None:
+   956→   956→        self._logger.warning(message, **kwargs)
+   957→   957→
+   958→   958→    def debug(self, message: str, **kwargs: Any) -> None:
+   959→   959→        self._logger.debug(message, **kwargs)
+   960→   960→```
+   961→   961→
+   962→   962→### Error Handling
+   963→   963→
+   964→   964→Define a consistent error handling strategy that translates domain exceptions into user-friendly Telegram messages.
+   965→   965→
+   966→   966→```python
+   967→   967→# adapters/telegram/error_handler.py
+   968→   968→from aiogram.types import Update
+   969→   969→from aiogram import Router
+   970→   970→
+   971→   971→from domain.exceptions.domain_exceptions import (
+   972→   972→    ChatAlreadyClosedError,
+   973→   973→    ConversationAlreadyEndedError,
+   974→   974→    MessageLimitExceededError,
+   975→   975→)
+   976→   976→
+   977→   977→
+   978→   978→router = Router()
+   979→   979→
+   980→   980→
+   981→   981→@router.error()
+   982→   982→async def handle_errors(update: Update, exception: Exception) -> None:
+   983→   983→    """Global error handler for the bot."""
+   984→   984→
+   985→   985→    error_messages = {
+   986→   986→        ChatAlreadyClosedError: "This chat is no longer active.",
+   987→   987→        ConversationAlreadyEndedError: "This conversation has ended. Start a new one with /chat.",
+   988→   988→        MessageLimitExceededError: "You've reached the message limit for this conversation. Start a new one with /chat.",
+   989→   989→        PermissionError: "You don't have permission to perform this action.",
+   990→   990→        ValueError: "Invalid input. Please check your request and try again.",
+   991→   991→    }
+   992→   992→
+   993→   993→    message_text = error_messages.get(type(exception), "An unexpected error occurred. Please try again later.")
+   994→   994→
+   995→   995→    if update.message:
+   996→   996→        await update.message.answer(f"⚠️ {message_text}")
+   997→   997→    elif update.callback_query:
+   998→   998→        await update.callback_query.answer(f"⚠️ {message_text}", show_alert=True)
+   999→   999→```
+  1000→  1000→
+  1001→  1001→### Dependency Injection
+  1002→  1002→
+  1003→  1003→The composition root wires all dependencies together. This is the single place where concrete implementations are bound to abstract interfaces.
+  1004→  1004→
+  1005→  1005→```python
+  1006→  1006→# infrastructure/container.py
+  1007→  1007→"""Composition root: wires all dependencies together."""
+  1008→  1008→
+  1009→  1009→from infrastructure.config import Settings
+  1010→  1010→from infrastructure.database.session import create_session_factory
+  1011→  1011→from adapters.database.user_repository import SQLAlchemyUserRepository
+  1012→  1012→from adapters.database.chat_repository import SQLAlchemyChatRepository
+  1013→  1013→from adapters.database.conversation_repository import SQLAlchemyConversationRepository
+  1014→  1014→from adapters.llm.openai_service import OpenAILLMService
+  1015→  1015→from adapters.events.redis_event_publisher import RedisEventPublisher
+  1016→  1016→from application.use_cases.register_user import RegisterUserUseCase
+  1017→  1017→from application.use_cases.start_conversation import StartConversationUseCase
+  1018→  1018→from application.use_cases.send_ai_message import SendAIMessageUseCase
+  1019→  1019→from redis.asyncio import Redis
+  1020→  1020→
+  1021→  1021→
+  1022→  1022→class Container:
+  1023→  1023→    """Application container — creates and wires all components."""
+  1024→  1024→
+  1025→  1025→    def __init__(self, settings: Settings) -> None:
+  1026→  1026→        self._settings = settings
+  1027→  1027→        self._redis: Redis | None = None
+  1028→  1028→        self._session_factory = None
+  1029→  1029→
+  1030→  1030→    async def initialize(self) -> None:
+  1031→  1031→        self._redis = Redis.from_url(self._settings.redis_url)
+  1032→  1032→        self._session_factory = create_session_factory(self._settings.database_url)
+  1033→  1033→
+  1034→  1034→    # --- Repositories (driven adapters) ---
+  1035→  1035→
+  1036→  1036→    def user_repository(self) -> SQLAlchemyUserRepository:
+  1037→  1037→        session = self._session_factory()
+  1038→  1038→        return SQLAlchemyUserRepository(session)
+  1039→  1039→
+  1040→  1040→    def chat_repository(self) -> SQLAlchemyChatRepository:
+  1041→  1041→        session = self._session_factory()
+  1042→  1042→        return SQLAlchemyChatRepository(session)
+  1043→  1043→
+  1044→  1044→    def conversation_repository(self) -> SQLAlchemyConversationRepository:
+  1045→  1045→        session = self._session_factory()
+  1046→  1046→        return SQLAlchemyConversationRepository(session)
+  1047→  1047→
+  1048→  1048→    # --- External services ---
+  1049→  1049→
+  1050→  1050→    def llm_service(self) -> OpenAILLMService:
+  1051→  1051→        return OpenAILLMService(
+  1052→  1052→            api_key=self._settings.openai_api_key,
+  1053→  1053→            model=self._settings.llm_model,
+  1054→  1054→        )
+  1055→  1055→
+  1056→  1056→    def event_publisher(self) -> RedisEventPublisher:
+  1057→  1057→        return RedisEventPublisher(self._redis)
+  1058→  1058→
+  1059→  1059→    # --- Use cases ---
+  1060→  1060→
+  1061→  1061→    def register_user_use_case(self) -> RegisterUserUseCase:
+  1062→  1062→        return RegisterUserUseCase(
+  1063→  1063→            user_repo=self.user_repository(),
+  1064→  1064→            referral_service=...,  # wired similarly
+  1065→  1065→        )
+  1066→  1066→
+  1067→  1067→    def start_conversation_use_case(self) -> StartConversationUseCase:
+  1068→  1068→        return StartConversationUseCase(
+  1069→  1069→            conversation_repo=self.conversation_repository(),
+  1070→  1070→            event_publisher=self.event_publisher(),
+  1071→  1071→        )
+  1072→  1072→
+  1073→  1073→    def send_ai_message_use_case(self) -> SendAIMessageUseCase:
+  1074→  1074→        return SendAIMessageUseCase(
+  1075→  1075→            conversation_repo=self.conversation_repository(),
+  1076→  1076→            llm_service=self.llm_service(),
+  1077→  1077→            event_publisher=self.event_publisher(),
+  1078→  1078→        )
+  1079→  1079→
+  1080→  1080→    async def shutdown(self) -> None:
+  1081→  1081→        if self._redis:
+  1082→  1082→            await self._redis.aclose()
+  1083→  1083→```
+  1084→  1084→
+  1085→  1085→### Configuration
+  1086→  1086→
+  1087→  1087→```python
+  1088→  1088→# infrastructure/config.py
+  1089→  1089→from pydantic_settings import BaseSettings
+  1090→  1090→
+  1091→  1091→
+  1092→  1092→class Settings(BaseSettings):
+  1093→  1093→    """Application configuration loaded from environment variables."""
+  1094→  1094→
+  1095→  1095→    # Bot settings
+  1096→  1096→    bot_token: str
+  1097→  1097→    bot_name: str = "MyBot"
+  1098→  1098→
+  1099→  1099→    # Database
+  1100→  1100→    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/bot"
+  1101→  1101→
+  1102→  1102→    # Redis
+  1103→  1103→    redis_url: str = "redis://localhost:6379/0"
+  1104→  1104→
+  1105→  1105→    # LLM
+  1106→  1106→    openai_api_key: str = ""
+  1107→  1107→    llm_model: str = "gpt-4o-mini"
+  1108→  1108→    llm_max_tokens: int = 2048
+  1109→  1109→    llm_temperature: float = 0.7
+  1110→  1110→
+  1111→  1111→    # Application limits
+  1112→  1112→    max_conversation_messages: int = 100
+  1113→  1113→    rate_limit_per_minute: int = 30
+  1114→  1114→
+  1115→  1115→    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+  1116→  1116→```
+  1117→  1117→
+  1118→  1118→---
+  1119→  1119→
+  1120→  1120→## Data Flow Across Layers
+  1121→  1121→
+  1122→  1122→Understanding how data transforms as it crosses layer boundaries is critical. Here is the complete flow for a user sending a message to the AI:
+  1123→  1123→
+  1124→  1124→```
+  1125→  1125→1. Telegram API → aiogram receives Update
+  1126→  1126→2. Framework Layer (aiogram Router) dispatches to handler
+  1127→  1127→3. Presentation Layer:
+  1128→  1128→   - Controller parses Message → creates SendAIMessageRequest DTO
+  1129→  1129→   - Calls SendAIMessageUseCase.execute(request)
+  1130→  1130→4. Application Layer:
+  1131→  1131→   - Use case loads Conversation via ConversationRepository port
+  1132→  1132→   - Validates message via MessageText value object
+  1133→  1133→   - Calls LLMService.generate_response() port
+  1134→  1134→   - Saves updated Conversation via repository port
+  1135→  1135→   - Publishes MessageSentToLLM event via EventPublisher port
+  1136→  1136→   - Returns SendAIMessageResponse DTO
+  1137→  1137→5. Presentation Layer:
+  1138→  1138→   - Presenter formats response DTO into Telegram markdown
+  1139→  1139→   - Handler calls message.answer(formatted_text)
+  1140→  1140→6. Framework Layer:
+  1141→  1141→   - aiogram sends API request to Telegram servers
+  1142→  1142→   - User receives the AI response
+  1143→  1143→```
+  1144→  1144→
+  1145→  1145→At each boundary crossing, data is transformed from one representation to another:
+  1146→  1146→- **Telegram Update → Request DTO**: Controller extracts relevant fields
+  1147→  1147→- **Request DTO → Domain Entities**: Use case reconstructs domain objects from repository
+  1148→  1148→- **Domain Entities → Response DTO**: Use case maps entity state to output structure
+  1149→  1149→- **Response DTO → Telegram Message**: Presenter formats for human consumption
+  1150→  1150→
+  1151→  1151→This transformation at each boundary is what makes Clean Architecture powerful — each layer communicates in its own language, optimized for its own concerns.
+  1152→  1152→
+  1153→  1153→---
+  1154→  1154→
+  1155→  1155→## Common Pitfalls by Layer
+  1156→  1156→
+  1157→  1157→### Domain Layer Pitfalls
+  1158→  1158→
+  1159→  1159→- **Anemic entities**: Entities with only getters and setters, no business logic. Push validation and state transitions into entities.
+  1160→  1160→- **Framework leakage**: Importing SQLAlchemy, Pydantic, or aiogram types in entity classes. Entities must be pure Python.
+  1161→  1161→- **Missing value objects**: Using raw `int` for telegram IDs or raw `str` for messages instead of dedicated value objects with validation.
+  1162→  1162→
+  1163→  1163→### Application Layer Pitfalls
+  1164→  1164→
+  1165→  1165→- **Use cases with infrastructure logic**: Directly importing database or LLM clients instead of using port interfaces.
+  1166→  1166→- **Fat DTOs**: Putting validation or business logic in DTOs. DTOs should be dumb data carriers.
+  1167→  1167→- **Missing error handling**: Not defining what happens when a port raises an exception. Use cases should handle expected failures gracefully.
+  1168→  1168→
+  1169→  1169→### Infrastructure Layer Pitfalls
+  1170→  1170→
+  1171→  1171→- **Leaking ORM models**: Returning SQLAlchemy model objects instead of domain entities from repositories. Always convert in the adapter.
+  1172→  1172→- **Tight coupling to specific vendor**: Hard-coding OpenAI-specific parameters in the LLM service. Keep vendor specifics behind the adapter.
+  1173→  1173→
+  1174→  1174→### Presentation Layer Pitfalls
+  1175→  1175→
+  1176→  1176→- **Business logic in handlers**: Handlers should parse input and format output only. Any decision-making belongs in use cases.
+  1177→  1177→- **Skipping the presenter**: Formatting messages directly in handlers couples presentation to control flow.
+  1178→  1178→- **Over-complex keyboard builders**: Keyboard logic should be simple and delegatable to a dedicated module.
+  1179→  1179→

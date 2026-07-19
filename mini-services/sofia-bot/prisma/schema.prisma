@@ -1,0 +1,187 @@
+// Sofia Bot — Prisma schema (SQLite, shared by bot mini-service + Next.js admin)
+// Clean Architecture: this schema lives in Infrastructure layer. Domain entities
+// are plain TS classes mapped to/from these models by repositories.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  telegramId          String   @unique
+  username            String?
+  firstName           String?
+  lastName            String?
+  language            String   @default("ru")
+
+  // Onboarding
+  name                String?
+  birthDate           DateTime?
+  birthTime           String?
+  birthPlace          String?
+  gender              String?
+  ageGroup            String?
+  zodiacSign          String?
+  onboardingCompleted Boolean  @default(false)
+  onboardingStep      String   @default("START")
+
+  // Currency
+  crystals            Int      @default(3)
+
+  // Subscription
+  subscriptionType    String? // "weekly" | "monthly" | null
+  subscriptionUntil   DateTime?
+
+  // Retention
+  streakDays          Int      @default(0)
+  lastActivityDay     DateTime?
+  lastSeenAt          DateTime?
+  lastDailyCardAt     DateTime?
+  lastFreeCardAt      DateTime?
+
+  // Referral
+  referredById        String?
+  referralCode        String   @unique
+  referralRewardGiven Boolean  @default(false)
+
+  // Moderation
+  rudenessCount       Int      @default(0)
+  isBlocked           Boolean  @default(false)
+  isAdmin             Boolean  @default(false)
+
+  // Counters
+  messageCount        Int      @default(0)
+  dailyMessageCount   Int      @default(0)
+  dailyMessageDate    DateTime?
+
+  // Memory
+  lastTopicSummary    String?
+
+  // Timestamps
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  conversations       Conversation[]
+  memories            Memory[]
+  transactions        Transaction[]
+  readings            Reading[]
+  referralsMade       Referral[] @relation("Referrer")
+  referralsReceived   Referral[] @relation("Referee")
+  auditLogs           AuditLog[]
+
+  @@index([username])
+  @@index([referredById])
+  @@index([lastSeenAt])
+  @@index([subscriptionUntil])
+  @@index([onboardingCompleted])
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  userId      String
+  role        String // "user" | "sofia"
+  content     String
+  emotionTag  String?
+  tokensUsed  Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Memory {
+  id          String   @id @default(cuid())
+  userId      String
+  kind        String   // "fact" | "emotional"
+  category    String   // fact: pain|relationship|work|family|goal|fear|promise|personality|health
+                       // emotional: main_pain|loved_one|promise|unfinished_question|life_event|fear|goal|breakthrough
+  content     String
+  context     String?
+  importance  Int      @default(3)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, category, content])
+  @@index([userId, importance])
+}
+
+model Transaction {
+  id           String   @id @default(cuid())
+  userId       String
+  type         String // "spend" | "add" | "admin_gift" | "referral" | "subscription" | "daily_bonus"
+  amount       Int
+  description  String?
+  balanceAfter Int?
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
+model Reading {
+  id            String   @id @default(cuid())
+  userId        String
+  type          String // "fate_card"|"tarot_small"|"tarot_full"|"tarot_love"|"tarot_career"|"tarot_decision"|"horoscope"|"single_card"|"card_of_day"
+  question      String?
+  cards         String // JSON array of {name, reversed, position}
+  interpretation String
+  cost          Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
+model Referral {
+  id          String   @id @default(cuid())
+  referrerId  String
+  refereeId   String
+  rewardGiven Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  referrer    User     @relation("Referrer", fields: [referrerId], references: [id])
+  referee     User     @relation("Referee", fields: [refereeId], references: [id])
+
+  @@unique([referrerId, refereeId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String? // admin telegram id
+  action       String
+  targetUserId String?
+  details      String?
+  createdAt    DateTime @default(now())
+
+  user         User?    @relation(fields: [actorId], references: [id])
+}
+
+model BotConfig {
+  id        String   @id
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Broadcast {
+  id          String   @id @default(cuid())
+  adminId     String
+  text        String
+  sentCount   Int      @default(0)
+  failedCount Int      @default(0)
+  total       Int      @default(0)
+  status      String   @default("pending") // "pending"|"sending"|"done"|"failed"
+  createdAt   DateTime @default(now())
+}

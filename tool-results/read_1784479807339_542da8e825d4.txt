@@ -1,0 +1,954 @@
+     1→# Event-Driven Architecture
+     2→
+     3→## Table of Contents
+     4→
+     5→- [Overview](#overview)
+     6→- [Domain Events in Bot Context](#domain-events-in-bot-context)
+     7→- [Event Bus Implementation with Asyncio](#event-bus-implementation-with-asyncio)
+     8→- [Async Event Processing and Eventual Consistency](#async-event-processing-and-eventual-consistency)
+     9→- [Event-Driven LLM Interaction Pipeline](#event-driven-llm-interaction-pipeline)
+    10→- [Saga Pattern for Multi-Step Bot Flows](#saga-pattern-for-multi-step-bot-flows)
+    11→- [Putting It All Together](#putting-it-all-together)
+    12→
+    13→---
+    14→
+    15→## Overview
+    16→
+    17→Event-driven architecture structures a system around the production, detection, and reaction to events. An event is a record of something that happened in the past — a fact, not a command. In a Telegram AI bot, events flow naturally: a user sends a message, the bot registers the user, an AI response is generated, a rate limit is hit. Each of these is an event that other parts of the system can react to without the producer knowing or caring about the consumers.
+    18→
+    19→The power of event-driven design in a bot context is decoupling. When a user registers, the registration use case should not need to know that a welcome message must be sent, a default chat must be created, usage statistics must be initialized, and an admin notification must be dispatched. The use case publishes a `UserRegistered` event. Subscribers react independently. New behaviors attach by adding subscribers, not by modifying the use case.
+    20→
+    21→This document covers domain events, the async event bus, eventual consistency, the LLM interaction pipeline as an event chain, and the saga pattern for multi-step bot workflows.
+    22→
+    23→---
+    24→
+    25→## Domain Events in Bot Context
+    26→
+    27→A domain event represents a significant state change in the domain. It is named in the past tense — something that has already happened. Events carry the minimum data needed for subscribers to react.
+    28→
+    29→### Event Definitions
+    30→
+    31→```python
+    32→# domain/events/events.py
+    33→from __future__ import annotations
+    34→
+    35→from dataclasses import dataclass, field
+    36→from datetime import datetime
+    37→from uuid import UUID, uuid4
+    38→
+    39→
+    40→@dataclass(frozen=True)
+    41→class DomainEvent:
+    42→    """Base class for all domain events. Provides identity and timestamp."""
+    43→    event_id: UUID = field(default_factory=uuid4)
+    44→    occurred_at: datetime = field(default_factory=datetime.utcnow)
+    45→
+    46→
+    47→@dataclass(frozen=True)
+    48→class UserRegistered(DomainEvent):
+    49→    """Published when a new user creates an account via /start."""
+    50→    user_id: UUID
+    51→    telegram_id: int
+    52→    username: str
+    53→    first_name: str
+    54→    language: str
+    55→
+    56→
+    57→@dataclass(frozen=True)
+    58→class MessageSent(DomainEvent):
+    59→    """Published when a user sends a message to the bot."""
+    60→    message_id: UUID
+    61→    chat_id: UUID
+    62→    user_id: UUID
+    63→    text: str
+    64→    telegram_message_id: int
+    65→
+    66→
+    67→@dataclass(frozen=True)
+    68→class AIResponseGenerated(DomainEvent):
+    69→    """Published when the AI completes a response."""
+    70→    response_id: UUID
+    71→    chat_id: UUID
+    72→    user_id: UUID
+    73→    prompt_tokens: int
+    74→    completion_tokens: int
+    75→    model: str
+    76→    finish_reason: str
+    77→
+    78→
+    79→@dataclass(frozen=True)
+    80→class AIResponseStreamed(DomainEvent):
+    81→    """Published when an AI response stream completes."""
+    82→    response_id: UUID
+    83→    chat_id: UUID
+    84→    user_id: UUID
+    85→    total_chunks: int
+    86→    model: str
+    87→
+    88→
+    89→@dataclass(frozen=True)
+    90→class ChatCreated(DomainEvent):
+    91→    """Published when a new chat session is initialized."""
+    92→    chat_id: UUID
+    93→    user_id: UUID
+    94→    chat_type: str
+    95→
+    96→
+    97→@dataclass(frozen=True)
+    98→class ChatClosed(DomainEvent):
+    99→    """Published when a chat session is explicitly closed."""
+   100→    chat_id: UUID
+   101→    user_id: UUID
+   102→    message_count: int
+   103→
+   104→
+   105→@dataclass(frozen=True)
+   106→class RateLimitExceeded(DomainEvent):
+   107→    """Published when a user exceeds their rate limit."""
+   108→    user_id: UUID
+   109→    operation: str
+   110→    limit: int
+   111→    window_seconds: int
+   112→
+   113→
+   114→@dataclass(frozen=True)
+   115→class UserLanguageChanged(DomainEvent):
+   116→    """Published when a user updates their language preference."""
+   117→    user_id: UUID
+   118→    old_language: str
+   119→    new_language: str
+   120→```
+   121→
+   122→### Entity Publishing Events
+   123→
+   124→Domain entities collect events as they mutate. The use case or repository extracts these events after the transaction commits and publishes them to the event bus.
+   125→
+   126→```python
+   127→# domain/entities/user.py (event publication support)
+   128→from __future__ import annotations
+   129→
+   130→from dataclasses import dataclass, field
+   131→from datetime import datetime
+   132→from uuid import UUID, uuid4
+   133→
+   134→from domain.events.events import UserRegistered, UserLanguageChanged, DomainEvent
+   135→from domain.value_objects.telegram_id import TelegramId
+   136→from domain.value_objects.language import Language
+   137→
+   138→
+   139→@dataclass
+   140→class User:
+   141→    id: UUID
+   142→    telegram_id: TelegramId
+   143→    username: str
+   144→    first_name: str
+   145→    language: Language
+   146→    created_at: datetime
+   147→    _events: list[DomainEvent] = field(default_factory=list, repr=False)
+   148→
+   149→    @classmethod
+   150→    def create(
+   151→        cls,
+   152→        telegram_id: TelegramId,
+   153→        username: str,
+   154→        first_name: str,
+   155→        language: Language,
+   156→    ) -> User:
+   157→        user = cls(
+   158→            id=uuid4(),
+   159→            telegram_id=telegram_id,
+   160→            username=username,
+   161→            first_name=first_name,
+   162→            language=language,
+   163→            created_at=datetime.utcnow(),
+   164→        )
+   165→        user._events.append(
+   166→            UserRegistered(
+   167→                user_id=user.id,
+   168→                telegram_id=telegram_id.value,
+   169→                username=username,
+   170→                first_name=first_name,
+   171→                language=language.code,
+   172→            )
+   173→        )
+   174→        return user
+   175→
+   176→    def change_language(self, new_language: Language) -> None:
+   177→        old = self.language.code
+   178→        self.language = new_language
+   179→        self._events.append(
+   180→            UserLanguageChanged(
+   181→                user_id=self.id,
+   182→                old_language=old,
+   183→                new_language=new_language.code,
+   184→            )
+   185→        )
+   186→
+   187→    def pull_events(self) -> list[DomainEvent]:
+   188→        """Extract and clear all pending events."""
+   189→        events = list(self._events)
+   190→        self._events.clear()
+   191→        return events
+   192→```
+   193→
+   194→---
+   195→
+   196→## Event Bus Implementation with Asyncio
+   197→
+   198→The event bus receives published events and dispatches them to all registered subscribers. Subscribers process events asynchronously, enabling concurrent reaction without blocking the publisher.
+   199→
+   200→### Event Bus
+   201→
+   202→```python
+   203→# application/events/event_bus.py
+   204→from __future__ import annotations
+   205→
+   206→import asyncio
+   207→from typing import Any, Callable, Coroutine, Type
+   208→
+   209→import structlog
+   210→
+   211→from domain.events.events import DomainEvent
+   212→
+   213→logger = structlog.get_logger()
+   214→
+   215→EventHandler = Callable[[DomainEvent], Coroutine[Any, Any, None]]
+   216→
+   217→
+   218→class EventBus:
+   219→    """Async event bus that dispatches domain events to registered handlers.
+   220→
+   221→    Each event type can have multiple subscribers. Subscribers are
+   222→    invoked concurrently via asyncio.gather. If a subscriber raises
+   223→    an exception, it is logged but does not prevent other subscribers
+   224→    from processing the event.
+   225→    """
+   226→
+   227→    def __init__(self) -> None:
+   228→        self._handlers: dict[Type[DomainEvent], list[EventHandler]] = {}
+   229→
+   230→    def subscribe(
+   231→        self,
+   232→        event_type: Type[DomainEvent],
+   233→        handler: EventHandler,
+   234→    ) -> None:
+   235→        """Register a handler for a specific event type."""
+   236→        if event_type not in self._handlers:
+   237→            self._handlers[event_type] = []
+   238→        self._handlers[event_type].append(handler)
+   239→
+   240→    async def publish(self, event: DomainEvent) -> None:
+   241→        """Publish an event to all registered subscribers."""
+   242→        event_type = type(event)
+   243→        handlers = self._handlers.get(event_type, [])
+   244→
+   245→        if not handlers:
+   246→            logger.debug(
+   247→                "event_no_subscribers",
+   248→                event_type=event_type.__name__,
+   249→                event_id=str(event.event_id),
+   250→            )
+   251→            return
+   252→
+   253→        logger.info(
+   254→            "event_published",
+   255→            event_type=event_type.__name__,
+   256→            event_id=str(event.event_id),
+   257→            subscriber_count=len(handlers),
+   258→        )
+   259→
+   260→        tasks = [self._safe_invoke(handler, event) for handler in handlers]
+   261→        await asyncio.gather(*tasks)
+   262→
+   263→    async def publish_all(self, events: list[DomainEvent]) -> None:
+   264→        """Publish multiple events sequentially in order."""
+   265→        for event in events:
+   266→            await self.publish(event)
+   267→
+   268→    @staticmethod
+   269→    async def _safe_invoke(handler: EventHandler, event: DomainEvent) -> None:
+   270→        """Invoke a handler, catching and logging any exceptions."""
+   271→        try:
+   272→            await handler(event)
+   273→        except Exception:
+   274→            logger.exception(
+   275→                "event_handler_failed",
+   276→                handler=handler.__qualname__,
+   277→                event_type=type(event).__name__,
+   278→                event_id=str(event.event_id),
+   279→            )
+   280→```
+   281→
+   282→### Event Subscribers
+   283→
+   284→```python
+   285→# application/events/subscribers/send_welcome_message.py
+   286→from __future__ import annotations
+   287→
+   288→import structlog
+   289→
+   290→from application.events.event_bus import EventHandler
+   291→from application.ports.telegram_gateway import TelegramGateway
+   292→from application.ports.user_repository import UserRepository
+   293→from domain.events.events import UserRegistered
+   294→from domain.value_objects.telegram_id import TelegramId
+   295→from presentation.keyboards.main_keyboard import build_main_keyboard
+   296→
+   297→logger = structlog.get_logger()
+   298→
+   299→
+   300→class SendWelcomeMessageSubscriber:
+   301→    """Reacts to UserRegistered by sending a welcome message."""
+   302→
+   303→    def __init__(
+   304→        self,
+   305→        telegram_gateway: TelegramGateway,
+   306→        user_repository: UserRepository,
+   307→    ) -> None:
+   308→        self._telegram_gateway = telegram_gateway
+   309→        self._user_repository = user_repository
+   310→
+   311→    async def handle(self, event: DomainEvent) -> None:
+   312→        if not isinstance(event, UserRegistered):
+   313→            return
+   314→
+   315→        user = await self._user_repository.get_by_id(event.user_id)
+   316→        if user is None:
+   317→            logger.warning("welcome_user_not_found", user_id=str(event.user_id))
+   318→            return
+   319→
+   320→        keyboard = build_main_keyboard(event.language)
+   321→        message = OutboundMessage(
+   322→            chat_id=event.telegram_id,
+   323→            text=f"Welcome, {event.first_name}! 🎉\n\nUse /ask to chat with AI.",
+   324→            reply_markup=keyboard,
+   325→        )
+   326→        await self._telegram_gateway.send_message(message)
+   327→
+   328→        logger.info(
+   329→            "welcome_message_sent",
+   330→            user_id=str(event.user_id),
+   331→            telegram_id=event.telegram_id,
+   332→        )
+   333→```
+   334→
+   335→```python
+   336→# application/events/subscribers/initialize_user_stats.py
+   337→from __future__ import annotations
+   338→
+   339→import structlog
+   340→
+   341→from application.events.event_bus import EventHandler
+   342→from application.ports.cache_backend import CacheBackend
+   343→from domain.events.events import UserRegistered
+   344→
+   345→logger = structlog.get_logger()
+   346→
+   347→
+   348→class InitializeUserStatsSubscriber:
+   349→    """Reacts to UserRegistered by initializing usage statistics in cache."""
+   350→
+   351→    def __init__(self, cache_backend: CacheBackend) -> None:
+   352→        self._cache_backend = cache_backend
+   353→
+   354→    async def handle(self, event: DomainEvent) -> None:
+   355→        if not isinstance(event, UserRegistered):
+   356→            return
+   357→
+   358→        stats = {
+   359→            "total_chats": 0,
+   360→            "total_messages": 0,
+   361→            "total_tokens": 0,
+   362→            "registered_at": event.occurred_at.isoformat(),
+   363→        }
+   364→        await self._cache_backend.set(
+   365→            key=f"user_stats:{event.user_id}",
+   366→            value=stats,
+   367→            ttl=86400,
+   368→        )
+   369→
+   370→        logger.info(
+   371→            "user_stats_initialized",
+   372→            user_id=str(event.user_id),
+   373→        )
+   374→```
+   375→
+   376→### Wiring Subscribers
+   377→
+   378→```python
+   379→# application/events/setup.py
+   380→from __future__ import annotations
+   381→
+   382→from application.events.event_bus import EventBus
+   383→from application.events.subscribers.send_welcome_message import SendWelcomeMessageSubscriber
+   384→from application.events.subscribers.initialize_user_stats import InitializeUserStatsSubscriber
+   385→from domain.events.events import UserRegistered
+   386→
+   387→
+   388→def setup_event_bus(
+   389→    welcome_subscriber: SendWelcomeMessageSubscriber,
+   390→    stats_subscriber: InitializeUserStatsSubscriber,
+   391→) -> EventBus:
+   392→    """Wire all event subscribers into the event bus."""
+   393→    bus = EventBus()
+   394→    bus.subscribe(UserRegistered, welcome_subscriber.handle)
+   395→    bus.subscribe(UserRegistered, stats_subscriber.handle)
+   396→    return bus
+   397→```
+   398→
+   399→---
+   400→
+   401→## Async Event Processing and Eventual Consistency
+   402→
+   403→When events are processed asynchronously by multiple subscribers, the system becomes eventually consistent. The welcome message may arrive a few milliseconds after the registration response. The statistics cache may be populated slightly after the user sees the welcome screen. This is acceptable and even desirable in a bot context — the user's immediate interaction is not blocked by side effects.
+   404→
+   405→### Consistency Model
+   406→
+   407→```
+   408→┌─────────────────────────────────────────────────────────────┐
+   409→│                    STRONG CONSISTENCY                        │
+   410→│                                                             │
+   411→│  User entity saved to PostgreSQL (within UoW transaction)   │
+   412→│  All invariants checked before commit                       │
+   413→│  If save fails, entire operation rolls back                 │
+   414→│                                                             │
+   415→├─────────────────────────────────────────────────────────────┤
+   416→│                  EVENTUAL CONSISTENCY                        │
+   417→│                                                             │
+   418→│  Welcome message sent via TelegramGateway                   │
+   419→│  Usage statistics initialized in Redis cache                │
+   420→│  Admin notification dispatched                              │
+   421→│  Default chat session created                               │
+   422→│                                                             │
+   423→│  These happen after the transaction commits.                │
+   424→│  Failure in any does not affect the others.                 │
+   425→│  Retry logic handles transient failures.                    │
+   426→└─────────────────────────────────────────────────────────────┘
+   427→```
+   428→
+   429→### Retry Mechanism for Subscribers
+   430→
+   431→```python
+   432→# application/events/retry_handler.py
+   433→from __future__ import annotations
+   434→
+   435→import asyncio
+   436→from typing import Any, Callable, Coroutine
+   437→
+   438→import structlog
+   439→
+   440→logger = structlog.get_logger()
+   441→
+   442→EventHandler = Callable[[Any], Coroutine[Any, Any, None]]
+   443→
+   444→
+   445→def with_retry(
+   446→    handler: EventHandler,
+   447→    max_retries: int = 3,
+   448→    backoff_base: float = 1.0,
+   449→) -> EventHandler:
+   450→    """Decorator that adds exponential backoff retry to an event handler."""
+   451→
+   452→    async def retry_wrapper(event: Any) -> None:
+   453→        last_exception: Exception | None = None
+   454→        for attempt in range(max_retries):
+   455→            try:
+   456→                await handler(event)
+   457→                return
+   458→            except Exception as exc:
+   459→                last_exception = exc
+   460→                delay = backoff_base * (2 ** attempt)
+   461→                logger.warning(
+   462→                    "event_handler_retry",
+   463→                    handler=handler.__qualname__,
+   464→                    event_type=type(event).__name__,
+   465→                    attempt=attempt + 1,
+   466→                    max_retries=max_retries,
+   467→                    delay=delay,
+   468→                    error=str(exc),
+   469→                )
+   470→                await asyncio.sleep(delay)
+   471→
+   472→        logger.error(
+   473→            "event_handler_exhausted_retries",
+   474→            handler=handler.__qualname__,
+   475→            event_type=type(event).__name__,
+   476→            error=str(last_exception),
+   477→        )
+   478→        if last_exception is not None:
+   479→            raise last_exception
+   480→
+   481→    return retry_wrapper
+   482→```
+   483→
+   484→Usage in subscriber wiring:
+   485→
+   486→```python
+   487→bus.subscribe(
+   488→    UserRegistered,
+   489→    with_retry(welcome_subscriber.handle, max_retries=3, backoff_base=1.0),
+   490→)
+   491→```
+   492→
+   493→---
+   494→
+   495→## Event-Driven LLM Interaction Pipeline
+   496→
+   497→The LLM interaction in a Telegram bot is a natural event chain: user sends a message, the bot records it, triggers AI generation, streams the response, and records the completed interaction. Each step produces an event that triggers the next.
+   498→
+   499→### Event Chain
+   500→
+   501→```
+   502→User sends message
+   503→    │
+   504→    ▼
+   505→MessageSent event published
+   506→    │
+   507→    ├──► ConversationHistorySubscriber: appends to Redis cache
+   508→    ├──► TokenCountSubscriber: checks token budget before generation
+   509→    │
+   510→    ▼ (if within budget)
+   511→AI generation triggered
+   512→    │
+   513→    ▼
+   514→Response streamed to Telegram (edit message progressively)
+   515→    │
+   516→    ▼
+   517→AIResponseGenerated event published
+   518→    │
+   519→    ├──► ConversationHistorySubscriber: appends assistant message
+   520→    ├──► UsageTrackingSubscriber: records token consumption
+   521→    ├──► CacheInvalidationSubscriber: clears stale profile cache
+   522→```
+   523→
+   524→### LLM Pipeline Subscribers
+   525→
+   526→```python
+   527→# application/events/subscribers/track_ai_usage.py
+   528→from __future__ import annotations
+   529→
+   530→import structlog
+   531→
+   532→from application.events.event_bus import EventHandler
+   533→from application.ports.cache_backend import CacheBackend
+   534→from domain.events.events import AIResponseGenerated
+   535→
+   536→logger = structlog.get_logger()
+   537→
+   538→
+   539→class TrackAIUsageSubscriber:
+   540→    """Reacts to AIResponseGenerated by updating token usage statistics."""
+   541→
+   542→    def __init__(self, cache_backend: CacheBackend) -> None:
+   543→        self._cache_backend = cache_backend
+   544→
+   545→    async def handle(self, event: DomainEvent) -> None:
+   546→        if not isinstance(event, AIResponseGenerated):
+   547→            return
+   548→
+   549→        stats_key = f"user_stats:{event.user_id}"
+   550→        stats = await self._cache_backend.get(stats_key)
+   551→
+   552→        if stats is None:
+   553→            stats = {"total_tokens": 0}
+   554→
+   555→        stats["total_tokens"] = stats.get("total_tokens", 0) + event.completion_tokens
+   556→        await self._cache_backend.set(stats_key, stats, ttl=86400)
+   557→
+   558→        logger.info(
+   559→            "ai_usage_tracked",
+   560→            user_id=str(event.user_id),
+   561→            prompt_tokens=event.prompt_tokens,
+   562→            completion_tokens=event.completion_tokens,
+   563→            total_tokens=stats["total_tokens"],
+   564→        )
+   565→```
+   566→
+   567→### Use Case Publishing Events After Commit
+   568→
+   569→```python
+   570→# application/commands/send_message_handler.py (event-driven version)
+   571→from __future__ import annotations
+   572→
+   573→from uuid import UUID
+   574→
+   575→import structlog
+   576→
+   577→from application.commands.commands import SendMessageCommand
+   578→from application.events.event_bus import EventBus
+   579→from application.ports.chat_repository import ChatRepository
+   580→from application.ports.llm_provider import LLMProvider
+   581→from application.ports.cache_backend import CacheBackend
+   582→from application.dto.llm_dto import GenerateRequest, ConversationMessage
+   583→from domain.events.events import MessageSent, AIResponseGenerated
+   584→from domain.exceptions.domain_exceptions import ChatNotFoundError
+   585→
+   586→logger = structlog.get_logger()
+   587→
+   588→
+   589→class SendMessageHandler:
+   590→    """Command handler: processes messages and publishes events."""
+   591→
+   592→    def __init__(
+   593→        self,
+   594→        chat_repository: ChatRepository,
+   595→        llm_provider: LLMProvider,
+   596→        cache_backend: CacheBackend,
+   597→        event_bus: EventBus,
+   598→    ) -> None:
+   599→        self._chat_repository = chat_repository
+   600→        self._llm_provider = llm_provider
+   601→        self._cache_backend = cache_backend
+   602→        self._event_bus = event_bus
+   603→
+   604→    async def handle(self, command: SendMessageCommand) -> UUID:
+   605→        chat = await self._chat_repository.get_by_id(command.chat_id)
+   606→        if chat is None:
+   607→            raise ChatNotFoundError(f"Chat {command.chat_id} not found")
+   608→
+   609→        # Publish MessageSent event
+   610→        message_event = MessageSent(
+   611→            message_id=chat.add_user_message(command.text),
+   612→            chat_id=command.chat_id,
+   613→            user_id=command.user_id,
+   614→            text=command.text,
+   615→            telegram_message_id=0,
+   616→        )
+   617→        await self._event_bus.publish(message_event)
+   618→
+   619→        # Generate AI response
+   620→        cached_history = await self._cache_backend.get(
+   621→            f"chat_history:{command.chat_id}"
+   622→        )
+   623→        history = []
+   624→        if cached_history:
+   625→            history = [ConversationMessage(**m) for m in cached_history]
+   626→
+   627→        llm_request = GenerateRequest(
+   628→            user_id=command.user_id,
+   629→            chat_id=command.chat_id,
+   630→            conversation_history=history,
+   631→            user_message=command.text,
+   632→            system_prompt="You are a helpful assistant.",
+   633→            temperature=0.7,
+   634→            max_tokens=2000,
+   635→        )
+   636→
+   637→        response = await self._llm_provider.generate(llm_request)
+   638→
+   639→        response_id = chat.add_assistant_message(response.text)
+   640→        await self._chat_repository.save(chat)
+   641→
+   642→        # Publish AIResponseGenerated event
+   643→        ai_event = AIResponseGenerated(
+   644→            response_id=response_id,
+   645→            chat_id=command.chat_id,
+   646→            user_id=command.user_id,
+   647→            prompt_tokens=response.tokens_used,
+   648→            completion_tokens=response.tokens_used,
+   649→            model=response.model,
+   650→            finish_reason=response.finish_reason,
+   651→        )
+   652→        await self._event_bus.publish(ai_event)
+   653→
+   654→        return response_id
+   655→```
+   656→
+   657→---
+   658→
+   659→## Saga Pattern for Multi-Step Bot Flows
+   660→
+   661→A saga coordinates multiple steps that must happen in sequence, where each step can succeed or fail independently. Unlike a distributed transaction, a saga compensates for failures by executing undo operations rather than rolling back a single transaction.
+   662→
+   663→### Registration Saga
+   664→
+   665→The registration flow for a new Telegram user involves multiple steps: create the user, send a welcome message, create a default chat, and initialize statistics. If the welcome message fails, the user still exists. If statistics initialization fails, the user can still chat. Each step is independently retriable.
+   666→
+   667→```python
+   668→# application/sagas/registration_saga.py
+   669→from __future__ import annotations
+   670→
+   671→from uuid import UUID
+   672→
+   673→import structlog
+   674→
+   675→from application.events.event_bus import EventBus
+   676→from application.ports.chat_repository import ChatRepository
+   677→from application.ports.telegram_gateway import TelegramGateway
+   678→from application.ports.cache_backend import CacheBackend
+   679→from application.ports.user_repository import UserRepository
+   680→from application.dto.message_dto import OutboundMessage
+   681→from domain.entities.chat import Chat
+   682→from domain.events.events import UserRegistered, ChatCreated
+   683→from domain.value_objects.telegram_id import TelegramId
+   684→
+   685→logger = structlog.get_logger()
+   686→
+   687→
+   688→class RegistrationSaga:
+   689→    """Orchestrates the multi-step registration flow.
+   690→
+   691→    Steps:
+   692→    1. User already created (triggered by UserRegistered event)
+   693→    2. Send welcome message
+   694→    3. Create default chat session
+   695→    4. Initialize usage statistics
+   696→
+   697→    Each step is independent. Failures are logged but do not
+   698→    prevent subsequent steps from executing.
+   699→    """
+   700→
+   701→    def __init__(
+   702→        self,
+   703→        user_repository: UserRepository,
+   704→        chat_repository: ChatRepository,
+   705→        telegram_gateway: TelegramGateway,
+   706→        cache_backend: CacheBackend,
+   707→        event_bus: EventBus,
+   708→    ) -> None:
+   709→        self._user_repository = user_repository
+   710→        self._chat_repository = chat_repository
+   711→        self._telegram_gateway = telegram_gateway
+   712→        self._cache_backend = cache_backend
+   713→        self._event_bus = event_bus
+   714→
+   715→    async def execute(self, event: UserRegistered) -> None:
+   716→        """Run all registration saga steps."""
+   717→        user = await self._user_repository.get_by_id(event.user_id)
+   718→        if user is None:
+   719→            logger.error("saga_user_not_found", user_id=str(event.user_id))
+   720→            return
+   721→
+   722→        # Step 1: Send welcome message
+   723→        await self._send_welcome(event)
+   724→
+   725→        # Step 2: Create default chat
+   726→        chat_id = await self._create_default_chat(event)
+   727→
+   728→        # Step 3: Initialize statistics
+   729→        await self._initialize_stats(event)
+   730→
+   731→        logger.info(
+   732→            "registration_saga_completed",
+   733→            user_id=str(event.user_id),
+   734→            chat_id=str(chat_id),
+   735→        )
+   736→
+   737→    async def _send_welcome(self, event: UserRegistered) -> None:
+   738→        try:
+   739→            message = OutboundMessage(
+   740→                chat_id=event.telegram_id,
+   741→                text=(
+   742→                    f"Welcome, {event.first_name}!\n\n"
+   743→                    "I'm your AI assistant. Here's how to get started:\n"
+   744→                    "• /ask <question> — Ask me anything\n"
+   745→                    "• /newchat — Start a new conversation\n"
+   746→                    "• /settings — Change your preferences\n"
+   747→                    "• /help — View all commands"
+   748→                ),
+   749→            )
+   750→            await self._telegram_gateway.send_message(message)
+   751→            logger.info("saga_welcome_sent", user_id=str(event.user_id))
+   752→        except Exception:
+   753→            logger.exception(
+   754→                "saga_welcome_failed",
+   755→                user_id=str(event.user_id),
+   756→            )
+   757→
+   758→    async def _create_default_chat(self, event: UserRegistered) -> UUID:
+   759→        try:
+   760→            chat = Chat.create(
+   761→                telegram_id=TelegramId(event.telegram_id),
+   762→                user_id=event.user_id,
+   763→                title="General",
+   764→            )
+   765→            saved_chat = await self._chat_repository.save(chat)
+   766→
+   767→            await self._event_bus.publish(
+   768→                ChatCreated(
+   769→                    chat_id=saved_chat.id,
+   770→                    user_id=event.user_id,
+   771→                    chat_type="private",
+   772→                )
+   773→            )
+   774→            logger.info(
+   775→                "saga_default_chat_created",
+   776→                user_id=str(event.user_id),
+   777→                chat_id=str(saved_chat.id),
+   778→            )
+   779→            return saved_chat.id
+   780→        except Exception:
+   781→            logger.exception(
+   782→                "saga_default_chat_failed",
+   783→                user_id=str(event.user_id),
+   784→            )
+   785→            raise
+   786→
+   787→    async def _initialize_stats(self, event: UserRegistered) -> None:
+   788→        try:
+   789→            stats = {
+   790→                "total_chats": 1,
+   791→                "total_messages": 0,
+   792→                "total_tokens": 0,
+   793→                "registered_at": event.occurred_at.isoformat(),
+   794→            }
+   795→            await self._cache_backend.set(
+   796→                f"user_stats:{event.user_id}",
+   797→                stats,
+   798→                ttl=86400,
+   799→            )
+   800→            logger.info("saga_stats_initialized", user_id=str(event.user_id))
+   801→        except Exception:
+   802→            logger.exception(
+   803→                "saga_stats_init_failed",
+   804→                user_id=str(event.user_id),
+   805→            )
+   806→```
+   807→
+   808→### Wiring the Saga as an Event Subscriber
+   809→
+   810→```python
+   811→# application/events/setup.py (extended)
+   812→from __future__ import annotations
+   813→
+   814→from application.events.event_bus import EventBus
+   815→from application.events.subscribers.initialize_user_stats import InitializeUserStatsSubscriber
+   816→from application.events.retry_handler import with_retry
+   817→from application.sagas.registration_saga import RegistrationSaga
+   818→from domain.events.events import UserRegistered
+   819→
+   820→
+   821→def setup_event_bus(
+   822→    registration_saga: RegistrationSaga,
+   823→    stats_subscriber: InitializeUserStatsSubscriber,
+   824→) -> EventBus:
+   825→    bus = EventBus()
+   826→
+   827→    # The saga handles the full registration flow
+   828→    bus.subscribe(
+   829→        UserRegistered,
+   830→        with_retry(registration_saga.execute, max_retries=2, backoff_base=2.0),
+   831→    )
+   832→
+   833→    # Stats subscriber runs alongside the saga
+   834→    bus.subscribe(UserRegistered, stats_subscriber.handle)
+   835→
+   836→    return bus
+   837→```
+   838→
+   839→### Chat-First Interaction Saga
+   840→
+   841→A more complex saga handles the user's first AI interaction after registration:
+   842→
+   843→```python
+   844→# application/sagas/first_interaction_saga.py
+   845→from __future__ import annotations
+   846→
+   847→import structlog
+   848→
+   849→from application.events.event_bus import EventBus
+   850→from application.ports.llm_provider import LLMProvider
+   851→from application.ports.telegram_gateway import TelegramGateway
+   852→from application.ports.cache_backend import CacheBackend
+   853→from application.dto.llm_dto import GenerateRequest
+   854→from application.dto.message_dto import OutboundMessage
+   855→from domain.events.events import ChatCreated
+   856→
+   857→logger = structlog.get_logger()
+   858→
+   859→
+   860→class FirstInteractionSaga:
+   861→    """Sends an introductory AI message when a new chat is created.
+   862→
+   863→    This saga reacts to ChatCreated events. If the chat was created
+   864→    as part of registration (the user has no prior messages), it
+   865→    sends an AI-generated greeting to kick off the conversation.
+   866→    """
+   867→
+   868→    def __init__(
+   869→        self,
+   870→        llm_provider: LLMProvider,
+   871→        telegram_gateway: TelegramGateway,
+   872→        cache_backend: CacheBackend,
+   873→    ) -> None:
+   874→        self._llm_provider = llm_provider
+   875→        self._telegram_gateway = telegram_gateway
+   876→        self._cache_backend = cache_backend
+   877→
+   878→    async def handle(self, event: DomainEvent) -> None:
+   879→        if not isinstance(event, ChatCreated):
+   880→            return
+   881→
+   882→        stats = await self._cache_backend.get(f"user_stats:{event.user_id}")
+   883→        if stats is not None and stats.get("total_messages", 0) > 0:
+   884→            return  # Not the first interaction
+   885→
+   886→        try:
+   887→            llm_request = GenerateRequest(
+   888→                user_id=event.user_id,
+   889→                chat_id=event.chat_id,
+   890→                conversation_history=[],
+   891→                user_message="Introduce yourself briefly.",
+   892→                system_prompt=(
+   893→                    "You are a friendly AI assistant in a Telegram bot. "
+   894→                    "Introduce yourself in 2-3 sentences. Be warm and inviting."
+   895→                ),
+   896→                temperature=0.8,
+   897→                max_tokens=200,
+   898→            )
+   899→            response = await self._llm_provider.generate(llm_request)
+   900→
+   901→            message = OutboundMessage(
+   902→                chat_id=event.chat_id,
+   903→                text=response.text,
+   904→            )
+   905→            await self._telegram_gateway.send_message(message)
+   906→
+   907→            if stats is not None:
+   908→                stats["total_messages"] = stats.get("total_messages", 0) + 1
+   909→                await self._cache_backend.set(
+   910→                    f"user_stats:{event.user_id}",
+   911→                    stats,
+   912→                    ttl=86400,
+   913→                )
+   914→
+   915→            logger.info(
+   916→                "first_interaction_sent",
+   917→                user_id=str(event.user_id),
+   918→                chat_id=str(event.chat_id),
+   919→            )
+   920→        except Exception:
+   921→            logger.exception(
+   922→                "first_interaction_failed",
+   923→                user_id=str(event.user_id),
+   924→            )
+   925→```
+   926→
+   927→---
+   928→
+   929→## Putting It All Together
+   930→
+   931→The event-driven architecture fits into the four-layer structure as follows:
+   932→
+   933→| Layer | Event Responsibility |
+   934→|-------|---------------------|
+   935→| Domain | Define events, emit from entities, provide `pull_events()` |
+   936→| Application | EventBus, subscribers, sagas, publish events after UoW commit |
+   937→| Infrastructure | Implement subscriber dependencies (TelegramGateway, CacheBackend) |
+   938→| Presentation | No direct event involvement — events are published by use cases |
+   939→
+   940→The event publishing flow in a use case:
+   941→
+   942→```
+   943→1. Use case executes business logic
+   944→2. Domain entity mutates and collects events internally
+   945→3. Use case persists entity via repository (within UoW)
+   946→4. UoW commits transaction
+   947→5. Use case extracts events from entity via pull_events()
+   948→6. Use case publishes events to EventBus
+   949→7. EventBus dispatches to subscribers concurrently
+   950→8. Subscribers react independently (send messages, update caches, trigger sagas)
+   951→```
+   952→
+   953→This model ensures that the core write operation is never blocked by side effects. If the welcome message fails, the user is still registered. If the statistics cache times out, the user can still chat. Event-driven architecture makes the system resilient to partial failures while keeping the write path fast and consistent.
+   954→

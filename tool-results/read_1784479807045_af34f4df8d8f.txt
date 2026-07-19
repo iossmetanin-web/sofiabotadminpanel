@@ -1,0 +1,916 @@
+     1→# Ports & Adapters Detailed Reference
+     2→
+     3→## Table of Contents
+     4→
+     5→- [Overview](#overview)
+     6→- [Port Interface Definitions Using Python Protocols](#port-interface-definitions-using-python-protocols)
+     7→  - [Repository Ports](#repository-ports)
+     8→  - [Service Ports](#service-ports)
+     9→  - [Gateway Ports](#gateway-ports)
+    10→- [Concrete Adapter Implementations](#concrete-adapter-implementations)
+    11→  - [Aiogram Adapter (Driving)](#aiogram-adapter-driving)
+    12→  - [PostgreSQL Adapter (Driven)](#postgresql-adapter-driven)
+    13→  - [Redis Adapter (Driven)](#redis-adapter-driven)
+    14→  - [OpenAI Adapter (Driven)](#openai-adapter-driven)
+    15→- [Swapping Adapters Without Changing Core Logic](#swapping-adapters-without-changing-core-logic)
+    16→- [Configuration-Driven Adapter Selection](#configuration-driven-adapter-selection)
+    17→
+    18→---
+    19→
+    20→## Overview
+    21→
+    22→This reference provides detailed specifications for every port and adapter in a hexagonal Telegram AI bot. Each port is expressed as a Python `Protocol`, and each adapter is a concrete class that implements one port using a specific technology. The goal is to make the mapping between abstract contracts and concrete implementations explicit, complete, and production-ready.
+    23→
+    24→Ports live in `application/ports/`. Adapters live in `infrastructure/` for driven (outbound) adapters and in `presentation/` for driving (inbound) adapters. The application core imports only from `application/ports/` and `domain/`. It never imports from `infrastructure/` or `presentation/`.
+    25→
+    26→---
+    27→
+    28→## Port Interface Definitions Using Python Protocols
+    29→
+    30→### Repository Ports
+    31→
+    32→Repository ports define how the application persists and retrieves domain entities. Every aggregate root gets its own repository port. The port operates in terms of domain types exclusively — no ORM models, no table names, no SQL.
+    33→
+    34→#### User Repository Port
+    35→
+    36→```python
+    37→# application/ports/user_repository.py
+    38→from __future__ import annotations
+    39→
+    40→from typing import Protocol
+    41→from uuid import UUID
+    42→
+    43→from domain.entities.user import User
+    44→from domain.value_objects.telegram_id import TelegramId
+    45→
+    46→
+    47→class UserRepository(Protocol):
+    48→    """Outbound port for user persistence.
+    49→
+    50→    All methods accept and return domain entities. No ORM models
+    51→    leak through this interface.
+    52→    """
+    53→
+    54→    async def get_by_id(self, user_id: UUID) -> User | None:
+    55→        """Find a user by internal UUID. Returns None if not found."""
+    56→        ...
+    57→
+    58→    async def get_by_telegram_id(self, telegram_id: TelegramId) -> User | None:
+    59→        """Find a user by Telegram identifier. Returns None if not found."""
+    60→        ...
+    61→
+    62→    async def save(self, user: User) -> User:
+    63→        """Persist a new or existing user. Returns the persisted entity."""
+    64→        ...
+    65→
+    66→    async def delete(self, user_id: UUID) -> bool:
+    67→        """Remove a user by ID. Returns True if deleted, False if not found."""
+    68→        ...
+    69→
+    70→    async def exists_by_telegram_id(self, telegram_id: TelegramId) -> bool:
+    71→        """Check existence without loading the full entity."""
+    72→        ...
+    73→
+    74→    async def list_active_users(
+    75→        self,
+    76→        limit: int = 50,
+    77→        offset: int = 0,
+    78→    ) -> list[User]:
+    79→        """Retrieve a paginated list of users with active status."""
+    80→        ...
+    81→```
+    82→
+    83→#### Chat Repository Port
+    84→
+    85→```python
+    86→# application/ports/chat_repository.py
+    87→from __future__ import annotations
+    88→
+    89→from typing import Protocol
+    90→from uuid import UUID
+    91→
+    92→from domain.entities.chat import Chat
+    93→from domain.value_objects.telegram_id import TelegramId
+    94→
+    95→
+    96→class ChatRepository(Protocol):
+    97→    """Outbound port for chat persistence."""
+    98→
+    99→    async def get_by_id(self, chat_id: UUID) -> Chat | None:
+   100→        ...
+   101→
+   102→    async def get_by_telegram_id(self, telegram_id: TelegramId) -> Chat | None:
+   103→        ...
+   104→
+   105→    async def save(self, chat: Chat) -> Chat:
+   106→        ...
+   107→
+   108→    async def get_active_chats_for_user(
+   109→        self,
+   110→        user_id: UUID,
+   111→        limit: int = 20,
+   112→    ) -> list[Chat]:
+   113→        """Return the most recent active chats for a given user."""
+   114→        ...
+   115→
+   116→    async def count_chats_for_user(self, user_id: UUID) -> int:
+   117→        """Count total chats associated with a user."""
+   118→        ...
+   119→```
+   120→
+   121→### Service Ports
+   122→
+   123→Service ports define contracts for external operations that are not simple CRUD — AI generation, notification delivery, rate limiting, and content moderation.
+   124→
+   125→#### LLM Provider Port
+   126→
+   127→```python
+   128→# application/ports/llm_provider.py
+   129→from __future__ import annotations
+   130→
+   131→from typing import AsyncIterator, Protocol
+   132→
+   133→from application.dto.llm_dto import GenerateRequest, GenerateResponse
+   134→
+   135→
+   136→class LLMProvider(Protocol):
+   137→    """Outbound port for large language model interaction."""
+   138→
+   139→    async def generate(self, request: GenerateRequest) -> GenerateResponse:
+   140→        """Generate a complete response in a single call."""
+   141→        ...
+   142→
+   143→    async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
+   144→        """Generate a response token-by-token for progressive delivery."""
+   145→        ...
+   146→
+   147→    async def count_tokens(self, text: str) -> int:
+   148→        """Count tokens for context window management."""
+   149→        ...
+   150→
+   151→    @property
+   152→    def model_name(self) -> str:
+   153→        """Identifier of the active model."""
+   154→        ...
+   155→
+   156→    @property
+   157→    def max_context_tokens(self) -> int:
+   158→        """Maximum context window for the active model."""
+   159→        ...
+   160→```
+   161→
+   162→#### Notification Service Port
+   163→
+   164→```python
+   165→# application/ports/notification_service.py
+   166→from __future__ import annotations
+   167→
+   168→from typing import Protocol
+   169→from uuid import UUID
+   170→
+   171→from application.dto.notification_dto import NotificationPayload
+   172→
+   173→
+   174→class NotificationService(Protocol):
+   175→    """Outbound port for delivering notifications to users."""
+   176→
+   177→    async def send(self, user_id: UUID, payload: NotificationPayload) -> bool:
+   178→        """Send a notification. Returns True if delivery succeeded."""
+   179→        ...
+   180→
+   181→    async def send_bulk(
+   182→        self,
+   183→        user_ids: list[UUID],
+   184→        payload: NotificationPayload,
+   185→    ) -> int:
+   186→        """Send to multiple users. Returns count of successful deliveries."""
+   187→        ...
+   188→```
+   189→
+   190→#### Rate Limiter Port
+   191→
+   192→```python
+   193→# application/ports/rate_limiter.py
+   194→from __future__ import annotations
+   195→
+   196→from typing import Protocol
+   197→
+   198→
+   199→class RateLimiter(Protocol):
+   200→    """Outbound port for rate limiting operations per user."""
+   201→
+   202→    async def is_allowed(
+   203→        self,
+   204→        identifier: str,
+   205→        limit: int,
+   206→        window_seconds: int,
+   207→    ) -> bool:
+   208→        """Check if the operation is within rate limits.
+   209→
+   210→        Returns True if the request is allowed, False if rate limited.
+   211→        Side effect: increments the counter for this window.
+   212→        """
+   213→        ...
+   214→
+   215→    async def get_remaining(
+   216→        self,
+   217→        identifier: str,
+   218→        limit: int,
+   219→        window_seconds: int,
+   220→    ) -> int:
+   221→        """Return the number of remaining requests in the current window."""
+   222→        ...
+   223→```
+   224→
+   225→### Gateway Ports
+   226→
+   227→Gateway ports define contracts for integrating with third-party APIs and external systems that require complex request/response mapping.
+   228→
+   229→#### Telegram Gateway Port
+   230→
+   231→```python
+   232→# application/ports/telegram_gateway.py
+   233→from __future__ import annotations
+   234→
+   235→from typing import Protocol
+   236→
+   237→from application.dto.message_dto import OutboundMessage, EditMessage
+   238→
+   239→
+   240→class TelegramGateway(Protocol):
+   241→    """Outbound port for sending messages through the Telegram Bot API.
+   242→
+   243→    This port allows the application core to send messages without
+   244→    depending on aiogram directly. The driving adapter (handler) uses
+   245→    aiogram's Bot class, but background services use this gateway.
+   246→    """
+   247→
+   248→    async def send_message(self, message: OutboundMessage) -> int:
+   249→        """Send a new message. Returns the Telegram message ID."""
+   250→        ...
+   251→
+   252→    async def edit_message(self, edit: EditMessage) -> bool:
+   253→        """Edit an existing message. Returns True if successful."""
+   254→        ...
+   255→
+   256→    async def delete_message(self, chat_id: int, message_id: int) -> bool:
+   257→        """Delete a message. Returns True if successful."""
+   258→        ...
+   259→```
+   260→
+   261→---
+   262→
+   263→## Concrete Adapter Implementations
+   264→
+   265→### Aiogram Adapter (Driving)
+   266→
+   267→The aiogram handler adapter translates Telegram `Update` objects into use case calls and use case responses into Telegram API calls. This is a driving adapter — it initiates calls into the application core.
+   268→
+   269→```python
+   270→# presentation/handlers/ai_handlers.py
+   271→from __future__ import annotations
+   272→
+   273→from aiogram import Router
+   274→from aiogram.types import Message, CallbackQuery
+   275→from aiogram.filters import Command
+   276→import structlog
+   277→
+   278→from application.use_cases.generate_response import GenerateResponse
+   279→from application.dto.llm_dto import GenerateRequest as LLMGenerateRequest
+   280→from application.dto.message_dto import ConversationMessage
+   281→from domain.exceptions.domain_exceptions import TokenLimitExceededError
+   282→from presentation.keyboards.ai_keyboard import build_ai_action_keyboard
+   283→
+   284→logger = structlog.get_logger()
+   285→
+   286→
+   287→def create_ai_router(generate_response_use_case: GenerateResponse) -> Router:
+   288→    """Driving adapter: routes Telegram AI interactions to the use case."""
+   289→    router = Router()
+   290→
+   291→    @router.message(Command("ask"))
+   292→    async def handle_ask_command(message: Message) -> None:
+   293→        """Translate /ask command into GenerateResponse use case invocation."""
+   294→        user_text = message.text.removeprefix("/ask").strip()
+   295→        if not user_text:
+   296→            await message.answer("Please provide a question after /ask")
+   297→            return
+   298→
+   299→        status_msg = await message.answer("Thinking...")
+   300→
+   301→        llm_request = LLMGenerateRequest(
+   302→            user_id=message.from_user.id,
+   303→            chat_id=message.chat.id,
+   304→            conversation_history=[],
+   305→            user_message=user_text,
+   306→            system_prompt="You are a helpful assistant.",
+   307→            temperature=0.7,
+   308→            max_tokens=2000,
+   309→        )
+   310→
+   311→        try:
+   312→            response = await generate_response_use_case.execute(llm_request)
+   313→            keyboard = build_ai_action_keyboard()
+   314→            await status_msg.edit_text(response.text, reply_markup=keyboard)
+   315→        except TokenLimitExceededError:
+   316→            await status_msg.edit_text(
+   317→                "Your conversation is too long. Start a new one with /newchat."
+   318→            )
+   319→        except Exception:
+   320→            logger.exception("generate_response_failed", chat_id=message.chat.id)
+   321→            await status_msg.edit_text("Failed to generate a response. Try again.")
+   322→
+   323→    return router
+   324→```
+   325→
+   326→### PostgreSQL Adapter (Driven)
+   327→
+   328→The PostgreSQL adapter translates between domain entities and SQLAlchemy ORM models. It implements the repository port using async SQLAlchemy sessions.
+   329→
+   330→```python
+   331→# infrastructure/database/repositories/chat_repository.py
+   332→from __future__ import annotations
+   333→
+   334→from uuid import UUID
+   335→
+   336→from sqlalchemy import select, func
+   337→from sqlalchemy.ext.asyncio import AsyncSession
+   338→import structlog
+   339→
+   340→from domain.entities.chat import Chat, ChatType, ChatStatus
+   341→from domain.value_objects.telegram_id import TelegramId
+   342→from infrastructure.database.models.chat import ChatModel
+   343→
+   344→logger = structlog.get_logger()
+   345→
+   346→
+   347→class PostgresChatRepository:
+   348→    """Driven adapter: implements ChatRepository using PostgreSQL."""
+   349→
+   350→    def __init__(self, session: AsyncSession) -> None:
+   351→        self._session = session
+   352→
+   353→    async def get_by_id(self, chat_id: UUID) -> Chat | None:
+   354→        stmt = select(ChatModel).where(ChatModel.id == chat_id)
+   355→        result = await self._session.execute(stmt)
+   356→        model = result.scalar_one_or_none()
+   357→        if model is None:
+   358→            return None
+   359→        return self._to_entity(model)
+   360→
+   361→    async def get_by_telegram_id(self, telegram_id: TelegramId) -> Chat | None:
+   362→        stmt = select(ChatModel).where(ChatModel.telegram_id == telegram_id.value)
+   363→        result = await self._session.execute(stmt)
+   364→        model = result.scalar_one_or_none()
+   365→        if model is None:
+   366→            return None
+   367→        return self._to_entity(model)
+   368→
+   369→    async def save(self, chat: Chat) -> Chat:
+   370→        model = self._to_model(chat)
+   371→        self._session.add(model)
+   372→        await self._session.flush()
+   373→        return chat
+   374→
+   375→    async def get_active_chats_for_user(
+   376→        self,
+   377→        user_id: UUID,
+   378→        limit: int = 20,
+   379→    ) -> list[Chat]:
+   380→        stmt = (
+   381→            select(ChatModel)
+   382→            .where(ChatModel.user_id == user_id, ChatModel.status == "active")
+   383→            .order_by(ChatModel.last_message_at.desc())
+   384→            .limit(limit)
+   385→        )
+   386→        result = await self._session.execute(stmt)
+   387→        models = result.scalars().all()
+   388→        return [self._to_entity(m) for m in models]
+   389→
+   390→    async def count_chats_for_user(self, user_id: UUID) -> int:
+   391→        stmt = select(func.count(ChatModel.id)).where(ChatModel.user_id == user_id)
+   392→        result = await self._session.execute(stmt)
+   393→        return result.scalar_one()
+   394→
+   395→    @staticmethod
+   396→    def _to_entity(model: ChatModel) -> Chat:
+   397→        return Chat(
+   398→            id=model.id,
+   399→            telegram_id=TelegramId(model.telegram_id),
+   400→            chat_type=ChatType(model.chat_type),
+   401→            status=ChatStatus(model.status),
+   402→            title=model.title,
+   403→            user_id=model.user_id,
+   404→            created_at=model.created_at,
+   405→            last_message_at=model.last_message_at,
+   406→        )
+   407→
+   408→    @staticmethod
+   409→    def _to_model(chat: Chat) -> ChatModel:
+   410→        return ChatModel(
+   411→            id=chat.id,
+   412→            telegram_id=chat.telegram_id.value,
+   413→            chat_type=chat.chat_type.value,
+   414→            status=chat.status.value,
+   415→            title=chat.title,
+   416→            user_id=chat.user_id,
+   417→            created_at=chat.created_at,
+   418→            last_message_at=chat.last_message_at,
+   419→        )
+   420→```
+   421→
+   422→### Redis Adapter (Driven)
+   423→
+   424→The Redis adapter implements cache and rate limiter ports using `redis.asyncio`. It handles serialization, key prefixing, and Redis-specific error mapping.
+   425→
+   426→```python
+   427→# infrastructure/redis/rate_limiter.py
+   428→from __future__ import annotations
+   429→
+   430→import redis.asyncio as aioredis
+   431→import structlog
+   432→
+   433→from domain.exceptions.infrastructure_exceptions import RateLimiterUnavailableError
+   434→
+   435→logger = structlog.get_logger()
+   436→
+   437→
+   438→class RedisRateLimiterAdapter:
+   439→    """Driven adapter: implements RateLimiter using Redis sliding window."""
+   440→
+   441→    def __init__(
+   442→        self,
+   443→        redis_client: aioredis.Redis,
+   444→        key_prefix: str = "ratelimit",
+   445→    ) -> None:
+   446→        self._redis = redis_client
+   447→        self._prefix = key_prefix
+   448→
+   449→    def _prefixed(self, identifier: str) -> str:
+   450→        return f"{self._prefix}:{identifier}"
+   451→
+   452→    async def is_allowed(
+   453→        self,
+   454→        identifier: str,
+   455→        limit: int,
+   456→        window_seconds: int,
+   457→    ) -> bool:
+   458→        key = self._prefixed(identifier)
+   459→        try:
+   460→            pipe = self._redis.pipeline()
+   461→            now_ms = int(__import__("time").time() * 1000)
+   462→            window_start = now_ms - (window_seconds * 1000)
+   463→
+   464→            pipe.zremrangebyscore(key, 0, window_start)
+   465→            pipe.zcard(key)
+   466→            pipe.zadd(key, {str(now_ms): now_ms})
+   467→            pipe.expire(key, window_seconds)
+   468→
+   469→            results = await pipe.execute()
+   470→            current_count = results[1]
+   471→
+   472→            if current_count >= limit:
+   473→                logger.warning(
+   474→                    "rate_limited",
+   475→                    identifier=identifier,
+   476→                    count=current_count,
+   477→                    limit=limit,
+   478→                )
+   479→                return False
+   480→            return True
+   481→        except aioredis.RedisError as exc:
+   482→            logger.error("rate_limiter_redis_error", error=str(exc))
+   483→            raise RateLimiterUnavailableError(str(exc)) from exc
+   484→
+   485→    async def get_remaining(
+   486→        self,
+   487→        identifier: str,
+   488→        limit: int,
+   489→        window_seconds: int,
+   490→    ) -> int:
+   491→        key = self._prefixed(identifier)
+   492→        try:
+   493→            now_ms = int(__import__("time").time() * 1000)
+   494→            window_start = now_ms - (window_seconds * 1000)
+   495→            await self._redis.zremrangebyscore(key, 0, window_start)
+   496→            current = await self._redis.zcard(key)
+   497→            return max(0, limit - current)
+   498→        except aioredis.RedisError:
+   499→            return limit
+   500→```
+   501→
+   502→### OpenAI Adapter (Driven)
+   503→
+   504→The OpenAI adapter implements the `LLMProvider` port. It handles API communication, streaming, token counting, and maps OpenAI-specific errors to domain exceptions.
+   505→
+   506→```python
+   507→# infrastructure/llm/providers/openai_provider.py
+   508→from __future__ import annotations
+   509→
+   510→from typing import AsyncIterator
+   511→
+   512→import openai
+   513→import structlog
+   514→
+   515→from application.dto.llm_dto import GenerateRequest, GenerateResponse
+   516→from domain.exceptions.llm_exceptions import (
+   517→    LLMRateLimitError,
+   518→    LLMTimeoutError,
+   519→    LLMContentFilterError,
+   520→    LLMProviderError,
+   521→)
+   522→
+   523→logger = structlog.get_logger()
+   524→
+   525→
+   526→class OpenAIProviderAdapter:
+   527→    """Driven adapter: implements LLMProvider using OpenAI's chat completions API."""
+   528→
+   529→    def __init__(
+   530→        self,
+   531→        api_key: str,
+   532→        model: str = "gpt-4o",
+   533→        max_context_tokens: int = 128000,
+   534→        default_temperature: float = 0.7,
+   535→        timeout: float = 60.0,
+   536→    ) -> None:
+   537→        self._client = openai.AsyncOpenAI(
+   538→            api_key=api_key,
+   539→            timeout=timeout,
+   540→        )
+   541→        self._model = model
+   542→        self._max_context_tokens = max_context_tokens
+   543→        self._default_temperature = default_temperature
+   544→
+   545→    async def generate(self, request: GenerateRequest) -> GenerateResponse:
+   546→        messages = self._build_messages(request)
+   547→        try:
+   548→            response = await self._client.chat.completions.create(
+   549→                model=self._model,
+   550→                messages=messages,
+   551→                temperature=request.temperature or self._default_temperature,
+   552→                max_tokens=request.max_tokens,
+   553→            )
+   554→        except openai.RateLimitError as exc:
+   555→            raise LLMRateLimitError(str(exc)) from exc
+   556→        except openai.APITimeoutError as exc:
+   557→            raise LLMTimeoutError(str(exc)) from exc
+   558→        except openai.BadRequestError as exc:
+   559→            if "content_policy" in str(exc).lower():
+   560→                raise LLMContentFilterError(str(exc)) from exc
+   561→            raise LLMProviderError(str(exc)) from exc
+   562→        except openai.APIError as exc:
+   563→            raise LLMProviderError(str(exc)) from exc
+   564→
+   565→        choice = response.choices[0]
+   566→        return GenerateResponse(
+   567→            text=choice.message.content or "",
+   568→            tokens_used=response.usage.total_tokens if response.usage else 0,
+   569→            model=self._model,
+   570→            finish_reason=choice.finish_reason or "stop",
+   571→        )
+   572→
+   573→    async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
+   574→        messages = self._build_messages(request)
+   575→        try:
+   576→            stream = await self._client.chat.completions.create(
+   577→                model=self._model,
+   578→                messages=messages,
+   579→                temperature=request.temperature or self._default_temperature,
+   580→                max_tokens=request.max_tokens,
+   581→                stream=True,
+   582→            )
+   583→        except openai.RateLimitError as exc:
+   584→            raise LLMRateLimitError(str(exc)) from exc
+   585→        except openai.APIError as exc:
+   586→            raise LLMProviderError(str(exc)) from exc
+   587→
+   588→        async for chunk in stream:
+   589→            delta = chunk.choices[0].delta
+   590→            if delta.content:
+   591→                yield delta.content
+   592→
+   593→    async def count_tokens(self, text: str) -> int:
+   594→        try:
+   595→            response = await self._client.chat.completions.create(
+   596→                model=self._model,
+   597→                messages=[{"role": "user", "content": text}],
+   598→                max_tokens=1,
+   599→            )
+   600→            return response.usage.prompt_tokens if response.usage else 0
+   601→        except openai.APIError:
+   602→            estimate = len(text) // 4
+   603→            return estimate
+   604→
+   605→    @property
+   606→    def model_name(self) -> str:
+   607→        return self._model
+   608→
+   609→    @property
+   610→    def max_context_tokens(self) -> int:
+   611→        return self._max_context_tokens
+   612→
+   613→    @staticmethod
+   614→    def _build_messages(request: GenerateRequest) -> list[dict[str, str]]:
+   615→        messages: list[dict[str, str]] = []
+   616→        if request.system_prompt:
+   617→            messages.append({"role": "system", "content": request.system_prompt})
+   618→        for msg in request.conversation_history:
+   619→            messages.append({"role": msg.role, "content": msg.content})
+   620→        messages.append({"role": "user", "content": request.user_message})
+   621→        return messages
+   622→```
+   623→
+   624→---
+   625→
+   626→## Swapping Adapters Without Changing Core Logic
+   627→
+   628→The defining advantage of hexagonal architecture is that swapping an adapter requires changing only the composition root — the one place where concrete adapters are wired to ports. No use case, entity, or handler changes.
+   629→
+   630→### Example: Swapping Redis Cache for In-Memory Cache
+   631→
+   632→Suppose you want to run the bot in a single-process development mode without Redis. Create an in-memory adapter:
+   633→
+   634→```python
+   635→# infrastructure/cache/memory_cache.py
+   636→from __future__ import annotations
+   637→
+   638→import time
+   639→from typing import Any
+   640→
+   641→import structlog
+   642→
+   643→from domain.exceptions.infrastructure_exceptions import CacheBackendError
+   644→
+   645→logger = structlog.get_logger()
+   646→
+   647→
+   648→class InMemoryCacheAdapter:
+   649→    """Driven adapter: implements CacheBackend using an in-memory dict.
+   650→
+   651→    Suitable for development and testing. Not suitable for multi-process
+   652→    production deployments.
+   653→    """
+   654→
+   655→    def __init__(self) -> None:
+   656→        self._store: dict[str, tuple[Any, float | None]] = {}
+   657→
+   658→    def _is_expired(self, key: str) -> bool:
+   659→        if key not in self._store:
+   660→            return True
+   661→        _, expires_at = self._store[key]
+   662→        if expires_at is not None and time.monotonic() > expires_at:
+   663→            del self._store[key]
+   664→            return True
+   665→        return False
+   666→
+   667→    async def get(self, key: str) -> Any | None:
+   668→        if self._is_expired(key):
+   669→            return None
+   670→        return self._store[key][0]
+   671→
+   672→    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+   673→        expires_at = time.monotonic() + ttl if ttl is not None else None
+   674→        self._store[key] = (value, expires_at)
+   675→
+   676→    async def delete(self, key: str) -> None:
+   677→        self._store.pop(key, None)
+   678→
+   679→    async def exists(self, key: str) -> bool:
+   680→        return not self._is_expired(key)
+   681→
+   682→    async def increment(self, key: str, amount: int = 1) -> int:
+   683→        if self._is_expired(key):
+   684→            self._store[key] = (amount, None)
+   685→            return amount
+   686→        current, expires_at = self._store[key]
+   687→        new_value = current + amount
+   688→        self._store[key] = (new_value, expires_at)
+   689→        return new_value
+   690→```
+   691→
+   692→Now change only the composition root:
+   693→
+   694→```python
+   695→# Before (production):
+   696→cache_backend = RedisCacheAdapter(redis_client)
+   697→
+   698→# After (development):
+   699→cache_backend = InMemoryCacheAdapter()
+   700→```
+   701→
+   702→The `RegisterUser` use case still receives a `CacheBackend` port. It neither knows nor cares which concrete adapter is behind the interface.
+   703→
+   704→### Example: Swapping OpenAI for Anthropic
+   705→
+   706→```python
+   707→# infrastructure/llm/providers/anthropic_provider.py
+   708→from __future__ import annotations
+   709→
+   710→from typing import AsyncIterator
+   711→
+   712→import anthropic
+   713→import structlog
+   714→
+   715→from application.dto.llm_dto import GenerateRequest, GenerateResponse
+   716→from domain.exceptions.llm_exceptions import LLMRateLimitError, LLMProviderError
+   717→
+   718→logger = structlog.get_logger()
+   719→
+   720→
+   721→class AnthropicProviderAdapter:
+   722→    """Driven adapter: implements LLMProvider using Anthropic's Messages API."""
+   723→
+   724→    def __init__(
+   725→        self,
+   726→        api_key: str,
+   727→        model: str = "claude-sonnet-4-20250514",
+   728→        max_context_tokens: int = 200000,
+   729→        timeout: float = 60.0,
+   730→    ) -> None:
+   731→        self._client = anthropic.AsyncAnthropic(
+   732→            api_key=api_key,
+   733→            timeout=timeout,
+   734→        )
+   735→        self._model = model
+   736→        self._max_context_tokens = max_context_tokens
+   737→
+   738→    async def generate(self, request: GenerateRequest) -> GenerateResponse:
+   739→        messages = self._build_messages(request)
+   740→        try:
+   741→            response = await self._client.messages.create(
+   742→                model=self._model,
+   743→                max_tokens=request.max_tokens or 4096,
+   744→                system=request.system_prompt or "You are a helpful assistant.",
+   745→                messages=messages,
+   746→            )
+   747→        except anthropic.RateLimitError as exc:
+   748→            raise LLMRateLimitError(str(exc)) from exc
+   749→        except anthropic.APIError as exc:
+   750→            raise LLMProviderError(str(exc)) from exc
+   751→
+   752→        text = response.content[0].text if response.content else ""
+   753→        return GenerateResponse(
+   754→            text=text,
+   755→            tokens_used=response.usage.input_tokens + response.usage.output_tokens,
+   756→            model=self._model,
+   757→            finish_reason=response.stop_reason or "end_turn",
+   758→        )
+   759→
+   760→    async def stream(self, request: GenerateRequest) -> AsyncIterator[str]:
+   761→        messages = self._build_messages(request)
+   762→        try:
+   763→            async with self._client.messages.stream(
+   764→                model=self._model,
+   765→                max_tokens=request.max_tokens or 4096,
+   766→                system=request.system_prompt or "You are a helpful assistant.",
+   767→                messages=messages,
+   768→            ) as stream:
+   769→                async for text in stream.text_stream:
+   770→                    yield text
+   771→        except anthropic.APIError as exc:
+   772→            raise LLMProviderError(str(exc)) from exc
+   773→
+   774→    async def count_tokens(self, text: str) -> int:
+   775→        estimate = len(text) // 4
+   776→        return estimate
+   777→
+   778→    @property
+   779→    def model_name(self) -> str:
+   780→        return self._model
+   781→
+   782→    @property
+   783→    def max_context_tokens(self) -> int:
+   784→        return self._max_context_tokens
+   785→
+   786→    @staticmethod
+   787→    def _build_messages(request: GenerateRequest) -> list[dict[str, str]]:
+   788→        messages: list[dict[str, str]] = []
+   789→        for msg in request.conversation_history:
+   790→            messages.append({"role": msg.role, "content": msg.content})
+   791→        messages.append({"role": "user", "content": request.user_message})
+   792→        return messages
+   793→```
+   794→
+   795→Swapping is again a single-line change in the composition root:
+   796→
+   797→```python
+   798→# Before:
+   799→llm_provider = OpenAIProviderAdapter(api_key=settings.openai_api_key)
+   800→
+   801→# After:
+   802→llm_provider = AnthropicProviderAdapter(api_key=settings.anthropic_api_key)
+   803→```
+   804→
+   805→---
+   806→
+   807→## Configuration-Driven Adapter Selection
+   808→
+   809→For production deployments, adapter selection should be driven by configuration rather than code changes. Use Pydantic-settings to define which adapter to use for each port, then resolve the concrete class in the composition root.
+   810→
+   811→### Configuration
+   812→
+   813→```python
+   814→# config.py
+   815→from __future__ import annotations
+   816→
+   817→from enum import Enum
+   818→
+   819→from pydantic_settings import BaseSettings
+   820→
+   821→
+   822→class CacheBackendType(str, Enum):
+   823→    REDIS = "redis"
+   824→    MEMORY = "memory"
+   825→
+   826→
+   827→class LLMProviderType(str, Enum):
+   828→    OPENAI = "openai"
+   829→    ANTHROPIC = "anthropic"
+   830→    OPENROUTER = "openrouter"
+   831→
+   832→
+   833→class Settings(BaseSettings):
+   834→    # Bot configuration
+   835→    bot_token: str
+   836→    environment: str = "production"
+   837→
+   838→    # Database
+   839→    database_url: str = "postgresql+asyncpg://bot:bot@localhost/bot"
+   840→
+   841→    # Redis
+   842→    redis_url: str = "redis://localhost:6379/0"
+   843→
+   844→    # Adapter selection
+   845→    cache_backend: CacheBackendType = CacheBackendType.REDIS
+   846→    llm_provider: LLMProviderType = LLMProviderType.OPENAI
+   847→
+   848→    # Provider-specific configuration
+   849→    openai_api_key: str = ""
+   850→    openai_model: str = "gpt-4o"
+   851→    anthropic_api_key: str = ""
+   852→    anthropic_model: str = "claude-sonnet-4-20250514"
+   853→    openrouter_api_key: str = ""
+   854→    openrouter_model: str = "meta-llama/llama-3-70b-instruct"
+   855→
+   856→    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+   857→```
+   858→
+   859→### Composition Root with Adapter Resolution
+   860→
+   861→```python
+   862→# main.py — Composition Root with configuration-driven adapter selection
+   863→from __future__ import annotations
+   864→
+   865→import redis.asyncio as aioredis
+   866→
+   867→from config import Settings, CacheBackendType, LLMProviderType
+   868→from application.ports.cache_backend import CacheBackend
+   869→from application.ports.llm_provider import LLMProvider
+   870→from infrastructure.redis.cache import RedisCacheAdapter
+   871→from infrastructure.cache.memory_cache import InMemoryCacheAdapter
+   872→from infrastructure.llm.providers.openai_provider import OpenAIProviderAdapter
+   873→from infrastructure.llm.providers.anthropic_provider import AnthropicProviderAdapter
+   874→
+   875→
+   876→def create_cache_backend(settings: Settings) -> CacheBackend:
+   877→    """Resolve cache backend from configuration."""
+   878→    if settings.cache_backend == CacheBackendType.REDIS:
+   879→        redis_client = aioredis.from_url(settings.redis_url)
+   880→        return RedisCacheAdapter(redis_client)
+   881→    if settings.cache_backend == CacheBackendType.MEMORY:
+   882→        return InMemoryCacheAdapter()
+   883→    raise ValueError(f"Unknown cache backend: {settings.cache_backend}")
+   884→
+   885→
+   886→def create_llm_provider(settings: Settings) -> LLMProvider:
+   887→    """Resolve LLM provider from configuration."""
+   888→    if settings.llm_provider == LLMProviderType.OPENAI:
+   889→        if not settings.openai_api_key:
+   890→            raise ValueError("OPENAI_API_KEY is required when using OpenAI provider")
+   891→        return OpenAIProviderAdapter(
+   892→            api_key=settings.openai_api_key,
+   893→            model=settings.openai_model,
+   894→        )
+   895→    if settings.llm_provider == LLMProviderType.ANTHROPIC:
+   896→        if not settings.anthropic_api_key:
+   897→            raise ValueError("ANTHROPIC_API_KEY is required when using Anthropic provider")
+   898→        return AnthropicProviderAdapter(
+   899→            api_key=settings.anthropic_api_key,
+   900→            model=settings.anthropic_model,
+   901→        )
+   902→    raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
+   903→
+   904→
+   905→async def main() -> None:
+   906→    settings = Settings()
+   907→
+   908→    cache = create_cache_backend(settings)
+   909→    llm = create_llm_provider(settings)
+   910→
+   911→    # Wire use cases with resolved adapters
+   912→    # ... (same as the hexagonal README composition root)
+   913→```
+   914→
+   915→This pattern scales naturally: each new adapter adds one enum variant and one factory branch. The application core never changes. The driving adapters never change. Only the composition root expands to accommodate new implementations of existing ports.
+   916→

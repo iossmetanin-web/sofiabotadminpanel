@@ -1,0 +1,939 @@
+     1→# CQRS Pattern for Telegram Bots
+     2→
+     3→## Table of Contents
+     4→
+     5→- [Overview](#overview)
+     6→- [Command/Query Separation Rationale](#commandquery-separation-rationale)
+     7→- [When CQRS Makes Sense for Bot Applications](#when-cqrs-makes-sense-for-bot-applications)
+     8→- [Command Handlers for Mutations](#command-handlers-for-mutations)
+     9→- [Query Handlers for Reads](#query-handlers-for-reads)
+    10→- [Command Bus and Query Bus Implementation](#command-bus-and-query-bus-implementation)
+    11→- [Integration with Unit of Work for Commands](#integration-with-unit-of-work-for-commands)
+    12→- [Putting It All Together](#putting-it-all-together)
+    13→
+    14→---
+    15→
+    16→## Overview
+    17→
+    18→CQRS (Command Query Responsibility Segregation) separates operations that change state (commands) from operations that read state (queries). The pattern was formalized by Greg Young and builds on Bertrand Meyer's Command-Query Separation principle. In a CQRS system, every method is either a command that mutates state and returns nothing meaningful, or a query that returns data and changes nothing.
+    19→
+    20→For a Telegram AI bot, CQRS provides a clean boundary between the write path — registering users, sending messages, generating AI responses, updating preferences — and the read path — fetching user profiles, listing conversations, displaying statistics. This separation is natural because bot interactions are fundamentally asymmetrical: users issue commands (/start, /ask, /settings), and the bot responds with queries (profile card, chat history, usage stats).
+    21→
+    22→The practical benefit is that command handlers and query handlers can be optimized independently. Commands use the full domain model with invariants and events. Queries can bypass the domain model entirely, reading from denormalized views or cache layers for maximum performance.
+    23→
+    24→---
+    25→
+    26→## Command/Query Separation Rationale
+    27→
+    28→### The Fundamental Asymmetry
+    29→
+    30→In a Telegram bot, writes and reads have fundamentally different characteristics:
+    31→
+    32→| Characteristic | Command (Write) | Query (Read) |
+    33→|---------------|-----------------|--------------|
+    34→| Intent | Change system state | Observe system state |
+    35→| Validation | Full domain invariant checks | No validation needed |
+    36→| Side effects | Domain events, notifications | None |
+    37→| Transaction scope | Unit of Work required | Read-only session |
+    38→| Return value | Command result (acknowledgment) | Data transfer object |
+    39→| Error handling | Domain exceptions | Not-found results |
+    40→| Concurrency | Optimistic locking, conflict resolution | Eventually consistent reads |
+    41→| Caching | Must invalidate cache | Should leverage cache |
+    42→
+    43→### Separation in Practice
+    44→
+    45→Without CQRS, a single use case mixes read and write concerns:
+    46→
+    47→```python
+    48→# Anti-pattern: mixed read/write concerns
+    49→class UserManager:
+    50→    async def register_and_get_profile(self, telegram_id: int) -> UserProfile:
+    51→        # Write: create the user
+    52→        user = await self.repo.get_by_telegram_id(telegram_id)
+    53→        if user is None:
+    54→            user = User(telegram_id=telegram_id)
+    55→            await self.repo.save(user)
+    56→        # Read: return the profile
+    57→        profile = await self.profile_repo.get_by_user_id(user.id)
+    58→        return profile
+    59→```
+    60→
+    61→With CQRS, the command and query are separate:
+    62→
+    63→```python
+    64→# Command: only writes
+    65→class RegisterUserCommand:
+    66→    telegram_id: int
+    67→    username: str
+    68→    first_name: str
+    69→    language: str
+    70→
+    71→class RegisterUserHandler:
+    72→    async def handle(self, command: RegisterUserCommand) -> UUID:
+    73→        ...
+    74→
+    75→# Query: only reads
+    76→class GetUserProfileQuery:
+    77→    user_id: UUID
+    78→
+    79→class GetUserProfileHandler:
+    80→    async def handle(self, query: GetUserProfileQuery) -> UserProfileDTO:
+    81→        ...
+    82→```
+    83→
+    84→---
+    85→
+    86→## When CQRS Makes Sense for Bot Applications
+    87→
+    88→CQRS adds complexity. Introducing command buses, query buses, separate handler classes, and potentially separate read models is not free. The decision depends on your bot's complexity.
+    89→
+    90→### When CQRS Is Appropriate
+    91→
+    92→**Multi-feature bots with distinct write and read patterns.** A bot that handles registration, AI conversations, admin commands, and analytics dashboards has natural write/read boundaries. Registration is a command. Displaying the user's profile is a query. Generating an AI response is a command. Listing conversation history is a query.
+    93→
+    94→**Bots where read performance matters.** If your bot serves an admin panel or statistics endpoint alongside the Telegram interface, reads can be served from denormalized views or cached projections without slowing down the write path.
+    95→
+    96→**Bots with complex domain invariants.** When command execution involves business rules, domain events, and multi-step validation, isolating the command handler lets you focus on the write model without read concerns bleeding in.
+    97→
+    98→### When CQRS Is Overkill
+    99→
+   100→**Simple echo or notification bots.** If your bot receives a message and responds with a static or trivially computed reply, CQRS adds structure without benefit. A single use case class per feature is sufficient.
+   101→
+   102→**Bots with fewer than five features.** The overhead of maintaining separate command and query hierarchies, buses, and handlers is justified only when the feature count makes the separation visually and logically clarifying.
+   103→
+   104→**Rapid prototyping.** If you are validating a bot concept, start with simple use cases and introduce CQRS when the write/read split becomes a source of confusion.
+   105→
+   106→---
+   107→
+   108→## Command Handlers for Mutations
+   109→
+   110→A command represents an intention to change state. It carries the data needed for the mutation but no behavior. The command handler contains the logic: validates the command, loads domain entities, invokes domain methods, persists changes, and publishes domain events.
+   111→
+   112→### Command Definitions
+   113→
+   114→```python
+   115→# application/commands/commands.py
+   116→from __future__ import annotations
+   117→
+   118→from dataclasses import dataclass
+   119→from uuid import UUID
+   120→
+   121→
+   122→@dataclass(frozen=True)
+   123→class RegisterUserCommand:
+   124→    """Command: create a new user account from a Telegram interaction."""
+   125→    telegram_id: int
+   126→    username: str
+   127→    first_name: str
+   128→    last_name: str
+   129→    language: str
+   130→
+   131→
+   132→@dataclass(frozen=True)
+   133→class SendMessageCommand:
+   134→    """Command: record a user message and trigger AI response generation."""
+   135→    chat_id: UUID
+   136→    user_id: UUID
+   137→    text: str
+   138→    reply_to_message_id: int | None = None
+   139→
+   140→
+   141→@dataclass(frozen=True)
+   142→class UpdateUserLanguageCommand:
+   143→    """Command: change the user's preferred language."""
+   144→    user_id: UUID
+   145→    language: str
+   146→
+   147→
+   148→@dataclass(frozen=True)
+   149→class CloseChatCommand:
+   150→    """Command: close an active chat session."""
+   151→    chat_id: UUID
+   152→    user_id: UUID
+   153→
+   154→
+   155→@dataclass(frozen=True)
+   156→class DeleteUserCommand:
+   157→    """Command: permanently remove a user and associated data."""
+   158→    user_id: UUID
+   159→    confirmed: bool = False
+   160→```
+   161→
+   162→### Command Handler Implementation
+   163→
+   164→```python
+   165→# application/commands/register_user_handler.py
+   166→from __future__ import annotations
+   167→
+   168→from uuid import UUID
+   169→
+   170→import structlog
+   171→
+   172→from application.commands.commands import RegisterUserCommand
+   173→from application.ports.user_repository import UserRepository
+   174→from application.ports.cache_backend import CacheBackend
+   175→from domain.entities.user import User
+   176→from domain.value_objects.telegram_id import TelegramId
+   177→from domain.value_objects.language import Language
+   178→from domain.exceptions.domain_exceptions import UserAlreadyExistsError
+   179→
+   180→logger = structlog.get_logger()
+   181→
+   182→
+   183→class RegisterUserHandler:
+   184→    """Command handler: processes user registration commands.
+   185→
+   186→    This handler orchestrates the write path for user creation.
+   187→    It loads no data for display — that is the query handler's job.
+   188→    """
+   189→
+   190→    def __init__(
+   191→        self,
+   192→        user_repository: UserRepository,
+   193→        cache_backend: CacheBackend,
+   194→    ) -> None:
+   195→        self._user_repository = user_repository
+   196→        self._cache_backend = cache_backend
+   197→
+   198→    async def handle(self, command: RegisterUserCommand) -> UUID:
+   199→        """Execute the registration command. Returns the new user's ID."""
+   200→        telegram_id = TelegramId(command.telegram_id)
+   201→        language = Language(command.language)
+   202→
+   203→        if await self._user_repository.exists_by_telegram_id(telegram_id):
+   204→            raise UserAlreadyExistsError(
+   205→                f"User with telegram_id={command.telegram_id} already exists"
+   206→            )
+   207→
+   208→        user = User.create(
+   209→            telegram_id=telegram_id,
+   210→            username=command.username,
+   211→            first_name=command.first_name,
+   212→            language=language,
+   213→        )
+   214→
+   215→        saved_user = await self._user_repository.save(user)
+   216→
+   217→        # Invalidate caches affected by this write
+   218→        await self._cache_backend.delete(f"user_profile:{saved_user.id}")
+   219→
+   220→        logger.info(
+   221→            "user_registered_via_command",
+   222→            user_id=str(saved_user.id),
+   223→            telegram_id=command.telegram_id,
+   224→        )
+   225→
+   226→        return saved_user.id
+   227→```
+   228→
+   229→### Send Message Command Handler
+   230→
+   231→```python
+   232→# application/commands/send_message_handler.py
+   233→from __future__ import annotations
+   234→
+   235→from uuid import UUID
+   236→
+   237→import structlog
+   238→
+   239→from application.commands.commands import SendMessageCommand
+   240→from application.ports.chat_repository import ChatRepository
+   241→from application.ports.llm_provider import LLMProvider
+   242→from application.ports.cache_backend import CacheBackend
+   243→from application.dto.llm_dto import GenerateRequest, ConversationMessage
+   244→from domain.exceptions.domain_exceptions import ChatNotFoundError, ChatClosedError
+   245→
+   246→logger = structlog.get_logger()
+   247→
+   248→
+   249→class SendMessageHandler:
+   250→    """Command handler: processes user messages and triggers AI response.
+   251→
+   252→    This is a write operation that mutates chat state and produces
+   253→    a new AI-generated message. The handler delegates to the LLM
+   254→    provider port for generation.
+   255→    """
+   256→
+   257→    def __init__(
+   258→        self,
+   259→        chat_repository: ChatRepository,
+   260→        llm_provider: LLMProvider,
+   261→        cache_backend: CacheBackend,
+   262→    ) -> None:
+   263→        self._chat_repository = chat_repository
+   264→        self._llm_provider = llm_provider
+   265→        self._cache_backend = cache_backend
+   266→
+   267→    async def handle(self, command: SendMessageCommand) -> UUID:
+   268→        """Execute the send message command. Returns the AI message ID."""
+   269→        chat = await self._chat_repository.get_by_id(command.chat_id)
+   270→        if chat is None:
+   271→            raise ChatNotFoundError(f"Chat {command.chat_id} not found")
+   272→        if chat.status.value != "active":
+   273→            raise ChatClosedError(f"Chat {command.chat_id} is closed")
+   274→
+   275→        # Build LLM request from chat history
+   276→        cached_history = await self._cache_backend.get(
+   277→            f"chat_history:{command.chat_id}"
+   278→        )
+   279→        conversation_history: list[ConversationMessage] = []
+   280→        if cached_history:
+   281→            conversation_history = [
+   282→                ConversationMessage(role=m["role"], content=m["content"])
+   283→                for m in cached_history
+   284→            ]
+   285→
+   286→        llm_request = GenerateRequest(
+   287→            user_id=command.user_id,
+   288→            chat_id=command.chat_id,
+   289→            conversation_history=conversation_history,
+   290→            user_message=command.text,
+   291→            system_prompt="You are a helpful assistant.",
+   292→            temperature=0.7,
+   293→            max_tokens=2000,
+   294→        )
+   295→
+   296→        response = await self._llm_provider.generate(llm_request)
+   297→
+   298→        # Update chat aggregate
+   299→        chat.add_message(
+   300→            role="user",
+   301→            content=command.text,
+   302→        )
+   303→        chat.add_message(
+   304→            role="assistant",
+   305→            content=response.text,
+   306→        )
+   307→        await self._chat_repository.save(chat)
+   308→
+   309→        # Update cached conversation history
+   310→        updated_history = conversation_history + [
+   311→            ConversationMessage(role="user", content=command.text),
+   312→            ConversationMessage(role="assistant", content=response.text),
+   313→        ]
+   314→        await self._cache_backend.set(
+   315→            f"chat_history:{command.chat_id}",
+   316→            [m.__dict__ for m in updated_history],
+   317→            ttl=3600,
+   318→        )
+   319→
+   320→        logger.info(
+   321→            "message_sent_command",
+   322→            chat_id=str(command.chat_id),
+   323→            tokens_used=response.tokens_used,
+   324→        )
+   325→
+   326→        return chat.messages[-1].id
+   327→```
+   328→
+   329→---
+   330→
+   331→## Query Handlers for Reads
+   332→
+   333→A query represents an intention to read state without modifying it. Query handlers load data and return DTOs optimized for the read use case. They can bypass the domain model and read from denormalized views, cached projections, or dedicated read models.
+   334→
+   335→### Query Definitions
+   336→
+   337→```python
+   338→# application/queries/queries.py
+   339→from __future__ import annotations
+   340→
+   341→from dataclasses import dataclass
+   342→from uuid import UUID
+   343→
+   344→
+   345→@dataclass(frozen=True)
+   346→class GetUserProfileQuery:
+   347→    """Query: retrieve a user's profile information."""
+   348→    user_id: UUID
+   349→
+   350→
+   351→@dataclass(frozen=True)
+   352→class ListUserChatsQuery:
+   353→    """Query: list recent chats for a user."""
+   354→    user_id: UUID
+   355→    limit: int = 20
+   356→    offset: int = 0
+   357→
+   358→
+   359→@dataclass(frozen=True)
+   360→class GetChatHistoryQuery:
+   361→    """Query: retrieve message history for a chat."""
+   362→    chat_id: UUID
+   363→    limit: int = 50
+   364→
+   365→
+   366→@dataclass(frozen=True)
+   367→class GetUserStatsQuery:
+   368→    """Query: retrieve usage statistics for a user."""
+   369→    user_id: UUID
+   370→
+   371→
+   372→@dataclass(frozen=True)
+   373→class SearchConversationsQuery:
+   374→    """Query: full-text search across a user's conversations."""
+   375→    user_id: UUID
+   376→    search_term: str
+   377→    limit: int = 10
+   378→```
+   379→
+   380→### Query Result DTOs
+   381→
+   382→```python
+   383→# application/queries/results.py
+   384→from __future__ import annotations
+   385→
+   386→from dataclasses import dataclass
+   387→from datetime import datetime
+   388→from uuid import UUID
+   389→
+   390→
+   391→@dataclass(frozen=True)
+   392→class UserProfileResult:
+   393→    user_id: UUID
+   394→    telegram_id: int
+   395→    username: str
+   396→    first_name: str
+   397→    language: str
+   398→    registered_at: datetime
+   399→    total_chats: int
+   400→    total_messages: int
+   401→
+   402→
+   403→@dataclass(frozen=True)
+   404→class ChatSummaryResult:
+   405→    chat_id: UUID
+   406→    title: str
+   407→    status: str
+   408→    last_message_at: datetime
+   409→    message_count: int
+   410→
+   411→
+   412→@dataclass(frozen=True)
+   413→class ChatHistoryResult:
+   414→    chat_id: UUID
+   415→    messages: list[MessageResult]
+   416→
+   417→
+   418→@dataclass(frozen=True)
+   419→class MessageResult:
+   420→    message_id: UUID
+   421→    role: str
+   422→    content: str
+   423→    created_at: datetime
+   424→
+   425→
+   426→@dataclass(frozen=True)
+   427→class UserStatsResult:
+   428→    user_id: UUID
+   429→    total_chats: int
+   430→    total_messages: int
+   431→    total_tokens_used: int
+   432→    average_response_length: float
+   433→    most_used_model: str
+   434→```
+   435→
+   436→### Query Handler Implementation
+   437→
+   438→```python
+   439→# application/queries/get_user_profile_handler.py
+   440→from __future__ import annotations
+   441→
+   442→import structlog
+   443→
+   444→from application.queries.queries import GetUserProfileQuery
+   445→from application.queries.results import UserProfileResult
+   446→from application.ports.user_repository import UserRepository
+   447→from application.ports.chat_repository import ChatRepository
+   448→from application.ports.cache_backend import CacheBackend
+   449→from domain.exceptions.domain_exceptions import UserNotFoundError
+   450→
+   451→logger = structlog.get_logger()
+   452→
+   453→
+   454→class GetUserProfileHandler:
+   455→    """Query handler: retrieves user profile data for display.
+   456→
+   457→    This handler is purely read-only. It loads data from repositories
+   458→    and cache, assembles a display-oriented DTO, and returns it.
+   459→    No domain invariants are checked. No state is mutated.
+   460→    """
+   461→
+   462→    def __init__(
+   463→        self,
+   464→        user_repository: UserRepository,
+   465→        chat_repository: ChatRepository,
+   466→        cache_backend: CacheBackend,
+   467→    ) -> None:
+   468→        self._user_repository = user_repository
+   469→        self._chat_repository = chat_repository
+   470→        self._cache_backend = cache_backend
+   471→
+   472→    async def handle(self, query: GetUserProfileQuery) -> UserProfileResult:
+   473→        """Execute the profile query. Returns a read-optimized DTO."""
+   474→        # Check cache first for read optimization
+   475→        cached = await self._cache_backend.get(f"user_profile:{query.user_id}")
+   476→        if cached is not None:
+   477→            return UserProfileResult(**cached)
+   478→
+   479→        user = await self._user_repository.get_by_id(query.user_id)
+   480→        if user is None:
+   481→            raise UserNotFoundError(f"User {query.user_id} not found")
+   482→
+   483→        total_chats = await self._chat_repository.count_chats_for_user(query.user_id)
+   484→
+   485→        result = UserProfileResult(
+   486→            user_id=user.id,
+   487→            telegram_id=user.telegram_id.value,
+   488→            username=user.username,
+   489→            first_name=user.first_name,
+   490→            language=user.language.code,
+   491→            registered_at=user.created_at,
+   492→            total_chats=total_chats,
+   493→            total_messages=user.message_count,
+   494→        )
+   495→
+   496→        # Cache the result for future reads
+   497→        await self._cache_backend.set(
+   498→            f"user_profile:{query.user_id}",
+   499→            {
+   500→                "user_id": str(result.user_id),
+   501→                "telegram_id": result.telegram_id,
+   502→                "username": result.username,
+   503→                "first_name": result.first_name,
+   504→                "language": result.language,
+   505→                "registered_at": result.registered_at.isoformat(),
+   506→                "total_chats": result.total_chats,
+   507→                "total_messages": result.total_messages,
+   508→            },
+   509→            ttl=300,
+   510→        )
+   511→
+   512→        return result
+   513→```
+   514→
+   515→### List Chats Query Handler
+   516→
+   517→```python
+   518→# application/queries/list_user_chats_handler.py
+   519→from __future__ import annotations
+   520→
+   521→import structlog
+   522→
+   523→from application.queries.queries import ListUserChatsQuery
+   524→from application.queries.results import ChatSummaryResult
+   525→from application.ports.chat_repository import ChatRepository
+   526→
+   527→logger = structlog.get_logger()
+   528→
+   529→
+   530→class ListUserChatsHandler:
+   531→    """Query handler: lists recent chats for display."""
+   532→
+   533→    def __init__(self, chat_repository: ChatRepository) -> None:
+   534→        self._chat_repository = chat_repository
+   535→
+   536→    async def handle(self, query: ListUserChatsQuery) -> list[ChatSummaryResult]:
+   537→        chats = await self._chat_repository.get_active_chats_for_user(
+   538→            user_id=query.user_id,
+   539→            limit=query.limit,
+   540→        )
+   541→
+   542→        return [
+   543→            ChatSummaryResult(
+   544→                chat_id=chat.id,
+   545→                title=chat.title or "Untitled Chat",
+   546→                status=chat.status.value,
+   547→                last_message_at=chat.last_message_at,
+   548→                message_count=len(chat.messages),
+   549→            )
+   550→            for chat in chats
+   551→        ]
+   552→```
+   553→
+   554→---
+   555→
+   556→## Command Bus and Query Bus Implementation
+   557→
+   558→The command bus dispatches commands to their registered handlers. The query bus does the same for queries. This decouples the caller (a handler or middleware) from the specific handler class, allowing cross-cutting concerns like logging, validation, and transaction management to be applied uniformly.
+   559→
+   560→### Command Bus
+   561→
+   562→```python
+   563→# application/bus/command_bus.py
+   564→from __future__ import annotations
+   565→
+   566→from typing import Any, Type
+   567→
+   568→import structlog
+   569→
+   570→from application.commands.commands import RegisterUserCommand, SendMessageCommand
+   571→from domain.exceptions.application_exceptions import CommandHandlerNotFoundError
+   572→
+   573→logger = structlog.get_logger()
+   574→
+   575→
+   576→class CommandBus:
+   577→    """Dispatches commands to their registered handlers.
+   578→
+   579→    The bus decouples command issuers from command handlers,
+   580→    enabling cross-cutting middleware like logging and metrics.
+   581→    """
+   582→
+   583→    def __init__(self) -> None:
+   584→        self._handlers: dict[Type[Any], Any] = {}
+   585→
+   586→    def register(self, command_type: Type[Any], handler: Any) -> None:
+   587→        """Register a handler for a specific command type."""
+   588→        self._handlers[command_type] = handler
+   589→
+   590→    async def dispatch(self, command: Any) -> Any:
+   591→        """Dispatch a command to its registered handler.
+   592→
+   593→        Raises CommandHandlerNotFoundError if no handler is registered
+   594→        for the command type.
+   595→        """
+   596→        command_type = type(command)
+   597→        handler = self._handlers.get(command_type)
+   598→
+   599→        if handler is None:
+   600→            raise CommandHandlerNotFoundError(
+   601→                f"No handler registered for {command_type.__name__}"
+   602→            )
+   603→
+   604→        logger.debug(
+   605→            "command_dispatched",
+   606→            command_type=command_type.__name__,
+   607→        )
+   608→
+   609→        result = await handler.handle(command)
+   610→
+   611→        logger.debug(
+   612→            "command_completed",
+   613→            command_type=command_type.__name__,
+   614→        )
+   615→
+   616→        return result
+   617→```
+   618→
+   619→### Query Bus
+   620→
+   621→```python
+   622→# application/bus/query_bus.py
+   623→from __future__ import annotations
+   624→
+   625→from typing import Any, Type
+   626→
+   627→import structlog
+   628→
+   629→from domain.exceptions.application_exceptions import QueryHandlerNotFoundError
+   630→
+   631→logger = structlog.get_logger()
+   632→
+   633→
+   634→class QueryBus:
+   635→    """Dispatches queries to their registered handlers.
+   636→
+   637→    Queries are read-only operations. The bus does not wrap
+   638→    them in a Unit of Work since no transaction is needed.
+   639→    """
+   640→
+   641→    def __init__(self) -> None:
+   642→        self._handlers: dict[Type[Any], Any] = {}
+   643→
+   644→    def register(self, query_type: Type[Any], handler: Any) -> None:
+   645→        """Register a handler for a specific query type."""
+   646→        self._handlers[query_type] = handler
+   647→
+   648→    async def dispatch(self, query: Any) -> Any:
+   649→        """Dispatch a query to its registered handler.
+   650→
+   651→        Raises QueryHandlerNotFoundError if no handler is registered.
+   652→        """
+   653→        query_type = type(query)
+   654→        handler = self._handlers.get(query_type)
+   655→
+   656→        if handler is None:
+   657→            raise QueryHandlerNotFoundError(
+   658→                f"No handler registered for {query_type.__name__}"
+   659→            )
+   660→
+   661→        logger.debug(
+   662→            "query_dispatched",
+   663→            query_type=query_type.__name__,
+   664→        )
+   665→
+   666→        result = await handler.handle(query)
+   667→
+   668→        logger.debug(
+   669→            "query_completed",
+   670→            query_type=query_type.__name__,
+   671→        )
+   672→
+   673→        return result
+   674→```
+   675→
+   676→### Bus Wiring
+   677→
+   678→```python
+   679→# application/bus/setup.py
+   680→from __future__ import annotations
+   681→
+   682→from application.bus.command_bus import CommandBus
+   683→from application.bus.query_bus import QueryBus
+   684→from application.commands.commands import (
+   685→    RegisterUserCommand,
+   686→    SendMessageCommand,
+   687→    UpdateUserLanguageCommand,
+   688→)
+   689→from application.commands.register_user_handler import RegisterUserHandler
+   690→from application.commands.send_message_handler import SendMessageHandler
+   691→from application.queries.queries import (
+   692→    GetUserProfileQuery,
+   693→    ListUserChatsQuery,
+   694→)
+   695→from application.queries.get_user_profile_handler import GetUserProfileHandler
+   696→from application.queries.list_user_chats_handler import ListUserChatsHandler
+   697→
+   698→
+   699→def setup_command_bus(
+   700→    register_user_handler: RegisterUserHandler,
+   701→    send_message_handler: SendMessageHandler,
+   702→) -> CommandBus:
+   703→    """Wire all command handlers into the command bus."""
+   704→    bus = CommandBus()
+   705→    bus.register(RegisterUserCommand, register_user_handler)
+   706→    bus.register(SendMessageCommand, send_message_handler)
+   707→    return bus
+   708→
+   709→
+   710→def setup_query_bus(
+   711→    get_user_profile_handler: GetUserProfileHandler,
+   712→    list_user_chats_handler: ListUserChatsHandler,
+   713→) -> QueryBus:
+   714→    """Wire all query handlers into the query bus."""
+   715→    bus = QueryBus()
+   716→    bus.register(GetUserProfileQuery, get_user_profile_handler)
+   717→    bus.register(ListUserChatsQuery, list_user_chats_handler)
+   718→    return bus
+   719→```
+   720→
+   721→### Handler Calling the Buses
+   722→
+   723→```python
+   724→# presentation/handlers/user_handlers.py — using buses
+   725→from __future__ import annotations
+   726→
+   727→from aiogram import Router
+   728→from aiogram.types import Message, CallbackQuery
+   729→from aiogram.filters import Command
+   730→import structlog
+   731→
+   732→from application.bus.command_bus import CommandBus
+   733→from application.bus.query_bus import QueryBus
+   734→from application.commands.commands import RegisterUserCommand, UpdateUserLanguageCommand
+   735→from application.queries.queries import GetUserProfileQuery
+   736→from domain.exceptions.domain_exceptions import UserAlreadyExistsError
+   737→
+   738→logger = structlog.get_logger()
+   739→
+   740→
+   741→def create_user_router(
+   742→    command_bus: CommandBus,
+   743→    query_bus: QueryBus,
+   744→) -> Router:
+   745→    router = Router()
+   746→
+   747→    @router.message(Command("start"))
+   748→    async def handle_start_command(message: Message) -> None:
+   749→        """Driving adapter: dispatches RegisterUserCommand via the bus."""
+   750→        command = RegisterUserCommand(
+   751→            telegram_id=message.from_user.id,
+   752→            username=message.from_user.username or "",
+   753→            first_name=message.from_user.first_name or "",
+   754→            last_name=message.from_user.last_name or "",
+   755→            language=message.from_user.language_code or "en",
+   756→        )
+   757→
+   758→        try:
+   759→            user_id = await command_bus.dispatch(command)
+   760→            query = GetUserProfileQuery(user_id=user_id)
+   761→            profile = await query_bus.dispatch(query)
+   762→            await message.answer(
+   763→                f"Welcome, {profile.first_name}! Your profile is ready."
+   764→            )
+   765→        except UserAlreadyExistsError:
+   766→            await message.answer("Welcome back! Your account already exists.")
+   767→        except Exception:
+   768→            logger.exception("start_command_failed")
+   769→            await message.answer("Something went wrong. Please try again later.")
+   770→
+   771→    return router
+   772→```
+   773→
+   774→---
+   775→
+   776→## Integration with Unit of Work for Commands
+   777→
+   778→Commands must execute within a transactional boundary. The Unit of Work pattern ensures that all database changes made by a command are committed atomically or rolled back on failure. The command bus should wrap each dispatch in a Unit of Work.
+   779→
+   780→### Unit of Work with Command Bus Middleware
+   781→
+   782→```python
+   783→# application/bus/unit_of_work_middleware.py
+   784→from __future__ import annotations
+   785→
+   786→from infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+   787→import structlog
+   788→
+   789→logger = structlog.get_logger()
+   790→
+   791→
+   792→class UnitOfWorkMiddleware:
+   793→    """Wraps command dispatch in a Unit of Work transaction.
+   794→
+   795→    If the command handler succeeds, the transaction is committed.
+   796→    If it raises an exception, the transaction is rolled back.
+   797→    """
+   798→
+   799→    def __init__(self, uow_factory: type[SqlAlchemyUnitOfWork]) -> None:
+   800→        self._uow_factory = uow_factory
+   801→
+   802→    async def execute(self, command: Any, handler: Any) -> Any:
+   803→        """Execute a command within a transactional boundary."""
+   804→        async with self._uow_factory() as uow:
+   805→            try:
+   806→                result = await handler.handle(command)
+   807→                await uow.commit()
+   808→                return result
+   809→            except Exception:
+   810→                await uow.rollback()
+   811→                raise
+   812→
+   813→
+   814→# Enhanced CommandBus with UoW support
+   815→# application/bus/command_bus.py (extended)
+   816→class CommandBus:
+   817→    def __init__(self, uow_factory: type[SqlAlchemyUnitOfWork] | None = None) -> None:
+   818→        self._handlers: dict[Type[Any], Any] = {}
+   819→        self._uow_factory = uow_factory
+   820→
+   821→    async def dispatch(self, command: Any) -> Any:
+   822→        command_type = type(command)
+   823→        handler = self._handlers.get(command_type)
+   824→
+   825→        if handler is None:
+   826→            raise CommandHandlerNotFoundError(
+   827→                f"No handler registered for {command_type.__name__}"
+   828→            )
+   829→
+   830→        if self._uow_factory is not None:
+   831→            async with self._uow_factory() as uow:
+   832→                try:
+   833→                    result = await handler.handle(command)
+   834→                    await uow.commit()
+   835→                    logger.info(
+   836→                        "command_committed",
+   837→                        command_type=command_type.__name__,
+   838→                    )
+   839→                    return result
+   840→                except Exception:
+   841→                    await uow.rollback()
+   842→                    logger.warning(
+   843→                        "command_rolled_back",
+   844→                        command_type=command_type.__name__,
+   845→                    )
+   846→                    raise
+   847→        else:
+   848→            return await handler.handle(command)
+   849→```
+   850→
+   851→### SqlAlchemy Unit of Work
+   852→
+   853→```python
+   854→# infrastructure/database/unit_of_work.py
+   855→from __future__ import annotations
+   856→
+   857→from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+   858→
+   859→import structlog
+   860→
+   861→logger = structlog.get_logger()
+   862→
+   863→
+   864→class SqlAlchemyUnitOfWork:
+   865→    """Manages the lifecycle of a database session and transaction.
+   866→
+   867→    Usage:
+   868→        async with SqlAlchemyUnitOfWork(session_factory) as uow:
+   869→            # ... operations using uow.session ...
+   870→            await uow.commit()
+   871→    """
+   872→
+   873→    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+   874→        self._session_factory = session_factory
+   875→        self._session: AsyncSession | None = None
+   876→
+   877→    async def __aenter__(self) -> SqlAlchemyUnitOfWork:
+   878→        self._session = self._session_factory()
+   879→        return self
+   880→
+   881→    async def __aexit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> None:
+   882→        if self._session is not None:
+   883→            if exc_type is not None:
+   884→                await self.rollback()
+   885→            await self._session.close()
+   886→            self._session = None
+   887→
+   888→    @property
+   889→    def session(self) -> AsyncSession:
+   890→        if self._session is None:
+   891→            raise RuntimeError("UnitOfWork session accessed outside of context")
+   892→        return self._session
+   893→
+   894→    async def commit(self) -> None:
+   895→        if self._session is not None:
+   896→            await self._session.commit()
+   897→            logger.debug("uow_committed")
+   898→
+   899→    async def rollback(self) -> None:
+   900→        if self._session is not None:
+   901→            await self._session.rollback()
+   902→            logger.debug("uow_rolled_back")
+   903→```
+   904→
+   905→---
+   906→
+   907→## Putting It All Together
+   908→
+   909→The complete CQRS flow for a Telegram AI bot, from the user's message to the bot's response:
+   910→
+   911→```
+   912→User sends /start
+   913→    │
+   914→    ▼
+   915→Aiogram Handler (Driving Adapter)
+   916→    │ constructs RegisterUserCommand
+   917→    ▼
+   918→CommandBus.dispatch(RegisterUserCommand)
+   919→    │ opens Unit of Work
+   920→    ▼
+   921→RegisterUserHandler.handle(command)
+   922→    │ validates, creates domain entity, saves via repository
+   923→    ▼
+   924→UnitOfWork.commit()
+   925→    │ transaction committed, domain events published
+   926→    ▼
+   927→Handler receives user_id from command result
+   928→    │ constructs GetUserProfileQuery
+   929→    ▼
+   930→QueryBus.dispatch(GetUserProfileQuery)
+   931→    ▼
+   932→GetUserProfileHandler.handle(query)
+   933→    │ reads from cache/repository, returns DTO
+   934→    ▼
+   935→Aiogram Handler formats and sends the Telegram reply
+   936→```
+   937→
+   938→This separation ensures that the write path (command) and read path (query) evolve independently. You can add a new projection for the profile query — a denormalized table, a Redis hash, an Elasticsearch index — without touching the registration command. You can add validation rules or domain events to the command without affecting the query. The CQRS boundary is a seam in your architecture, and seams are where flexibility lives.
+   939→

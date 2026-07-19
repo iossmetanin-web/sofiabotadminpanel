@@ -1,0 +1,914 @@
+     1→"""
+     2→Работа с PostgreSQL через asyncpg.
+     3→Connection-per-request: каждое обращение открывает соединение и сразу закрывает.
+     4→НЕТ пула — на Vercel Serverless пул убивает PostgreSQL зомби-коннектами.
+     5→
+     6→Концепция v2: добавлены
+     7→- колонки users: last_seen_at, gender, age_group, probing_count, last_free_card_at, last_topic_summary
+     8→- таблица emotional_memory (главная боль, близкие, обещания, незакрытые вопросы, события)
+     9→"""
+    10→import os
+    11→import asyncpg
+    12→import logging
+    13→from typing import Optional
+    14→from datetime import datetime, timezone, timedelta
+    15→
+    16→logger = logging.getLogger(__name__)
+    17→
+    18→DATABASE_URL = os.getenv("DATABASE_URL")
+    19→
+    20→
+    21→async def get_conn():
+    22→    """Открываем соединение на ОДИН запрос и сразу закрываем."""
+    23→    return await asyncpg.connect(DATABASE_URL)
+    24→
+    25→
+    26→async def init_db():
+    27→    """Создание таблиц и миграции при первом запуске. Безопасно (IF NOT EXISTS)."""
+    28→    conn = await get_conn()
+    29→    try:
+    30→        # ─── users ───
+    31→        await conn.execute('''
+    32→            CREATE TABLE IF NOT EXISTS users (
+    33→                user_id BIGINT PRIMARY KEY,
+    34→                username TEXT,
+    35→                first_name TEXT,
+    36→                name TEXT,
+    37→                birth_date DATE,
+    38→                birth_time TIME,
+    39→                birth_place TEXT,
+    40→                crystals INTEGER DEFAULT 3,
+    41→                state TEXT DEFAULT 'START',
+    42→                rudeness_count INTEGER DEFAULT 0,
+    43→                is_blocked BOOLEAN DEFAULT FALSE,
+    44→                message_count INTEGER DEFAULT 0,
+    45→                reading_type TEXT DEFAULT NULL,
+    46→                created_at TIMESTAMP DEFAULT NOW(),
+    47→                updated_at TIMESTAMP DEFAULT NOW()
+    48→            )
+    49→        ''')
+    50→
+    51→        # Концепция v2 — новые колонки users (безопасная миграция)
+    52→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP')
+    53→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT NULL')
+    54→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS age_group TEXT DEFAULT NULL')
+    55→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS probing_count INTEGER DEFAULT 0')
+    56→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_free_card_at TIMESTAMP')
+    57→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_topic_summary TEXT')
+    58→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE')
+    59→        # Концепция v2 round 2 — рефералы и daily horoscope
+    60→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT')
+    61→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_reward_given BOOLEAN DEFAULT FALSE')
+    62→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_horoscope_date DATE')
+    63→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_horoscope_opt_in BOOLEAN DEFAULT FALSE')
+    64→        # Round 5 — карта дня и последний отправленный бродкаст
+    65→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_card_of_day_at TIMESTAMP')
+    66→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_broadcast_at TIMESTAMP')
+    67→        # Round 6 — коммерческая модель: дневной лимит бесплатных сообщений
+    68→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_message_count INTEGER DEFAULT 0')
+    69→        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_message_date DATE DEFAULT NULL')
+    70→
+    71→        # ─── conversations ───
+    72→        await conn.execute('''
+    73→            CREATE TABLE IF NOT EXISTS conversations (
+    74→                id SERIAL PRIMARY KEY,
+    75→                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+    76→                role TEXT NOT NULL CHECK (role IN ('user', 'sofia')),
+    77→                content TEXT NOT NULL,
+    78→                emotion_tag TEXT,
+    79→                created_at TIMESTAMP DEFAULT NOW()
+    80→            )
+    81→        ''')
+    82→
+    83→        # ─── memory_facts (существующая) ───
+    84→        await conn.execute('''
+    85→            CREATE TABLE IF NOT EXISTS memory_facts (
+    86→                id SERIAL PRIMARY KEY,
+    87→                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+    88→                fact_type TEXT NOT NULL,
+    89→                fact_content TEXT NOT NULL,
+    90→                importance INTEGER DEFAULT 3,
+    91→                created_at TIMESTAMP DEFAULT NOW(),
+    92→                updated_at TIMESTAMP DEFAULT NOW()
+    93→            )
+    94→        ''')
+    95→
+    96→        # ─── emotional_memory (НОВАЯ — концепция v2) ───
+    97→        # Типы: main_pain, loved_one, promise, unfinished_question, life_event, fear, goal, breakthrough
+    98→        await conn.execute('''
+    99→            CREATE TABLE IF NOT EXISTS emotional_memory (
+   100→                id SERIAL PRIMARY KEY,
+   101→                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+   102→                memory_type TEXT NOT NULL,
+   103→                content TEXT NOT NULL,
+   104→                context TEXT,
+   105→                importance INTEGER DEFAULT 3,
+   106→                created_at TIMESTAMP DEFAULT NOW(),
+   107→                updated_at TIMESTAMP DEFAULT NOW()
+   108→            )
+   109→        ''')
+   110→
+   111→        # ─── transactions ───
+   112→        await conn.execute('''
+   113→            CREATE TABLE IF NOT EXISTS transactions (
+   114→                id SERIAL PRIMARY KEY,
+   115→                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+   116→                type TEXT NOT NULL CHECK (type IN ('spend', 'add', 'admin_gift')),
+   117→                amount INTEGER NOT NULL,
+   118→                description TEXT,
+   119→                created_at TIMESTAMP DEFAULT NOW()
+   120→            )
+   121→        ''')
+   122→
+   123→        # ─── rate_limits ───
+   124→        await conn.execute('''
+   125→            CREATE TABLE IF NOT EXISTS rate_limits (
+   126→                user_id BIGINT PRIMARY KEY,
+   127→                last_message_at TIMESTAMP DEFAULT NOW()
+   128→            )
+   129→        ''')
+   130→
+   131→        # Индексы
+   132→        await conn.execute('''
+   133→            CREATE INDEX IF NOT EXISTS idx_conversations_user_created
+   134→            ON conversations(user_id, created_at DESC)
+   135→        ''')
+   136→        await conn.execute('''
+   137→            CREATE INDEX IF NOT EXISTS idx_memory_facts_user_importance
+   138→            ON memory_facts(user_id, importance DESC)
+   139→        ''')
+   140→        await conn.execute('''
+   141→            CREATE INDEX IF NOT EXISTS idx_emotional_memory_user_importance
+   142→            ON emotional_memory(user_id, importance DESC)
+   143→        ''')
+   144→        logger.info("Database tables initialized (concept v2 migration applied)")
+   145→    finally:
+   146→        await conn.close()
+   147→
+   148→
+   149→# ─── Users ───
+   150→
+   151→async def get_user(user_id: int) -> Optional[dict]:
+   152→    """Возвращает пользователя как dict или None."""
+   153→    conn = await get_conn()
+   154→    try:
+   155→        row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+   156→        return dict(row) if row else None
+   157→    finally:
+   158→        await conn.close()
+   159→
+   160→
+   161→async def create_user(user_id: int, username: str, first_name: str) -> dict:
+   162→    """Создаёт пользователя с 3 кристаллами, возвращает его."""
+   163→    conn = await get_conn()
+   164→    try:
+   165→        await conn.execute(
+   166→            """INSERT INTO users (user_id, username, first_name, crystals, state, last_seen_at)
+   167→               VALUES ($1, $2, $3, 3, 'START', NOW())
+   168→               ON CONFLICT (user_id) DO NOTHING""",
+   169→            user_id, username, first_name,
+   170→        )
+   171→        row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+   172→        logger.info(f"New user created: {user_id}")
+   173→        return dict(row)
+   174→    finally:
+   175→        await conn.close()
+   176→
+   177→
+   178→async def get_or_create_user(user_id: int, username: str = None, first_name: str = None) -> dict:
+   179→    """Возвращает пользователя или создаёт нового."""
+   180→    user = await get_user(user_id)
+   181→    if user is None:
+   182→        user = await create_user(user_id, username or "", first_name or "")
+   183→    return user
+   184→
+   185→
+   186→async def update_user_state(user_id: int, state: str):
+   187→    """Обновляет состояние FSM."""
+   188→    conn = await get_conn()
+   189→    try:
+   190→        await conn.execute(
+   191→            "UPDATE users SET state = $1, updated_at = NOW(), last_seen_at = NOW() WHERE user_id = $2",
+   192→            state, user_id,
+   193→        )
+   194→    finally:
+   195→        await conn.close()
+   196→
+   197→
+   198→async def update_user_profile(user_id: int, **fields):
+   199→    """Универсальное обновление профиля."""
+   200→    if not fields:
+   201→        return
+   202→    conn = await get_conn()
+   203→    try:
+   204→        sets = []
+   205→        vals = []
+   206→        for k, v in fields.items():
+   207→            sets.append(f"{k} = ${len(vals) + 1}")
+   208→            vals.append(v)
+   209→        vals.append(user_id)
+   210→        query = f"UPDATE users SET {', '.join(sets)}, updated_at = NOW() WHERE user_id = ${len(vals)}"
+   211→        await conn.execute(query, *vals)
+   212→    finally:
+   213→        await conn.close()
+   214→
+   215→
+   216→async def touch_last_seen(user_id: int):
+   217→    """Обновляет время последней активности (без изменения state)."""
+   218→    conn = await get_conn()
+   219→    try:
+   220→        await conn.execute(
+   221→            "UPDATE users SET last_seen_at = NOW(), updated_at = NOW() WHERE user_id = $1",
+   222→            user_id,
+   223→        )
+   224→    finally:
+   225→        await conn.close()
+   226→
+   227→
+   228→async def increment_rudeness(user_id: int) -> int:
+   229→    """Увеличивает счётчик грубости, возвращает новое значение."""
+   230→    conn = await get_conn()
+   231→    try:
+   232→        new_count = await conn.fetchval(
+   233→            """UPDATE users
+   234→               SET rudeness_count = rudeness_count + 1, updated_at = NOW()
+   235→               WHERE user_id = $1
+   236→               RETURNING rudeness_count""",
+   237→            user_id,
+   238→        )
+   239→        return new_count
+   240→    finally:
+   241→        await conn.close()
+   242→
+   243→
+   244→async def reset_rudeness(user_id: int):
+   245→    """Сбрасывает счётчик грубости и блокировку."""
+   246→    conn = await get_conn()
+   247→    try:
+   248→        await conn.execute(
+   249→            """UPDATE users
+   250→               SET rudeness_count = 0, is_blocked = FALSE, updated_at = NOW()
+   251→               WHERE user_id = $1""",
+   252→            user_id,
+   253→        )
+   254→    finally:
+   255→        await conn.close()
+   256→
+   257→
+   258→async def increment_message_count(user_id: int) -> int:
+   259→    """Увеличивает счётчик сообщений, возвращает новое значение."""
+   260→    conn = await get_conn()
+   261→    try:
+   262→        new_count = await conn.fetchval(
+   263→            """UPDATE users
+   264→               SET message_count = message_count + 1, updated_at = NOW(), last_seen_at = NOW()
+   265→               WHERE user_id = $1
+   266→               RETURNING message_count""",
+   267→            user_id,
+   268→        )
+   269→        return new_count
+   270→    finally:
+   271→        await conn.close()
+   272→
+   273→
+   274→async def increment_daily_message_count(user_id: int) -> int:
+   275→    """Увеличивает дневной счётчик сообщений.
+   276→
+   277→    Если последний раз считали в другой день — сбрасываем в 1.
+   278→    Возвращает текущее количество сообщений за сегодня.
+   279→    """
+   280→    conn = await get_conn()
+   281→    try:
+   282→        new_count = await conn.fetchval(
+   283→            """UPDATE users
+   284→               SET daily_message_count = CASE
+   285→                       WHEN daily_message_date = CURRENT_DATE THEN daily_message_count + 1
+   286→                       ELSE 1
+   287→                   END,
+   288→                   daily_message_date = CURRENT_DATE,
+   289→                   updated_at = NOW()
+   290→               WHERE user_id = $1
+   291→               RETURNING daily_message_count""",
+   292→            user_id,
+   293→        )
+   294→        return new_count or 0
+   295→    finally:
+   296→        await conn.close()
+   297→
+   298→
+   299→async def get_daily_message_count(user_id: int) -> int:
+   300→    """Возвращает количество сообщений за сегодня (0 если в другой день)."""
+   301→    conn = await get_conn()
+   302→    try:
+   303→        row = await conn.fetchrow(
+   304→            """SELECT daily_message_count, daily_message_date FROM users WHERE user_id = $1""",
+   305→            user_id,
+   306→        )
+   307→        if not row:
+   308→            return 0
+   309→        if row["daily_message_date"] is None:
+   310→            return 0
+   311→        # Если дата не сегодня — возвращаем 0
+   312→        from datetime import date as _date
+   313→        if row["daily_message_date"] != _date.today():
+   314→            return 0
+   315→        return row["daily_message_count"] or 0
+   316→    finally:
+   317→        await conn.close()
+   318→
+   319→
+   320→async def increment_probing(user_id: int) -> int:
+   321→    """Увеличивает счётчик вопросов прощупывания."""
+   322→    conn = await get_conn()
+   323→    try:
+   324→        new_count = await conn.fetchval(
+   325→            """UPDATE users SET probing_count = probing_count + 1, updated_at = NOW()
+   326→               WHERE user_id = $1 RETURNING probing_count""",
+   327→            user_id,
+   328→        )
+   329→        return new_count or 0
+   330→    finally:
+   331→        await conn.close()
+   332→
+   333→
+   334→async def mark_onboarding_completed(user_id: int):
+   335→    conn = await get_conn()
+   336→    try:
+   337→        await conn.execute(
+   338→            "UPDATE users SET onboarding_completed = TRUE, updated_at = NOW() WHERE user_id = $1",
+   339→            user_id,
+   340→        )
+   341→    finally:
+   342→        await conn.close()
+   343→
+   344→
+   345→async def get_user_crystals(user_id: int) -> int:
+   346→    conn = await get_conn()
+   347→    try:
+   348→        crystals = await conn.fetchval(
+   349→            "SELECT crystals FROM users WHERE user_id = $1", user_id
+   350→        )
+   351→        return crystals or 0
+   352→    finally:
+   353→        await conn.close()
+   354→
+   355→
+   356→async def spend_crystals(user_id: int, amount: int, description: str = "") -> bool:
+   357→    conn = await get_conn()
+   358→    try:
+   359→        async with conn.transaction():
+   360→            current = await conn.fetchval(
+   361→                "SELECT crystals FROM users WHERE user_id = $1 FOR UPDATE", user_id
+   362→            )
+   363→            if current is None or current < amount:
+   364→                return False
+   365→            await conn.execute(
+   366→                "UPDATE users SET crystals = crystals - $1, updated_at = NOW() WHERE user_id = $2",
+   367→                amount, user_id,
+   368→            )
+   369→            await conn.execute(
+   370→                "INSERT INTO transactions (user_id, type, amount, description) VALUES ($1, 'spend', $2, $3)",
+   371→                user_id, amount, description,
+   372→            )
+   373→            logger.info(f"User {user_id} spent {amount} crystals: {description}")
+   374→            return True
+   375→    finally:
+   376→        await conn.close()
+   377→
+   378→
+   379→async def add_crystals(user_id: int, amount: int, description: str = "", txn_type: str = "add"):
+   380→    conn = await get_conn()
+   381→    try:
+   382→        async with conn.transaction():
+   383→            await conn.execute(
+   384→                "UPDATE users SET crystals = crystals + $1, updated_at = NOW() WHERE user_id = $2",
+   385→                amount, user_id,
+   386→            )
+   387→            await conn.execute(
+   388→                "INSERT INTO transactions (user_id, type, amount, description) VALUES ($1, $2, $3, $4)",
+   389→                user_id, txn_type, amount, description,
+   390→            )
+   391→            logger.info(f"User {user_id} received {amount} crystals: {description}")
+   392→    finally:
+   393→        await conn.close()
+   394→
+   395→
+   396→# ─── Conversations ───
+   397→
+   398→async def save_message(user_id: int, role: str, content: str, emotion_tag: str = None):
+   399→    conn = await get_conn()
+   400→    try:
+   401→        await conn.execute(
+   402→            "INSERT INTO conversations (user_id, role, content, emotion_tag) VALUES ($1, $2, $3, $4)",
+   403→            user_id, role, content, emotion_tag,
+   404→        )
+   405→    finally:
+   406→        await conn.close()
+   407→
+   408→
+   409→async def get_recent_messages(user_id: int, limit: int = 8) -> list[dict]:
+   410→    conn = await get_conn()
+   411→    try:
+   412→        rows = await conn.fetch(
+   413→            "SELECT role, content, emotion_tag, created_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+   414→            user_id, limit,
+   415→        )
+   416→        return [dict(r) for r in reversed(rows)]
+   417→    finally:
+   418→        await conn.close()
+   419→
+   420→
+   421→async def get_message_count(user_id: int) -> int:
+   422→    conn = await get_conn()
+   423→    try:
+   424→        count = await conn.fetchval(
+   425→            "SELECT COUNT(*) FROM conversations WHERE user_id = $1", user_id
+   426→        )
+   427→        return count or 0
+   428→    finally:
+   429→        await conn.close()
+   430→
+   431→
+   432→async def get_last_user_message(user_id: int) -> Optional[dict]:
+   433→    """Последнее сообщение пользователя (для темы возвращения)."""
+   434→    conn = await get_conn()
+   435→    try:
+   436→        row = await conn.fetchrow(
+   437→            """SELECT content, created_at FROM conversations
+   438→               WHERE user_id = $1 AND role = 'user'
+   439→               ORDER BY created_at DESC LIMIT 1""",
+   440→            user_id,
+   441→        )
+   442→        return dict(row) if row else None
+   443→    finally:
+   444→        await conn.close()
+   445→
+   446→
+   447→async def update_last_topic_summary(user_id: int, summary: str):
+   448→    """Сохраняет краткую сводку последней темы разговора."""
+   449→    conn = await get_conn()
+   450→    try:
+   451→        await conn.execute(
+   452→            "UPDATE users SET last_topic_summary = $1, updated_at = NOW() WHERE user_id = $2",
+   453→            summary[:300], user_id,
+   454→        )
+   455→    finally:
+   456→        await conn.close()
+   457→
+   458→
+   459→# ─── Memory Facts ───
+   460→
+   461→async def save_memory_fact(user_id: int, fact_type: str, content: str, importance: int = 3):
+   462→    conn = await get_conn()
+   463→    try:
+   464→        existing = await conn.fetchval(
+   465→            """SELECT id FROM memory_facts
+   466→               WHERE user_id = $1 AND fact_type = $2 AND fact_content = $3""",
+   467→            user_id, fact_type, content,
+   468→        )
+   469→        if existing:
+   470→            await conn.execute(
+   471→                """UPDATE memory_facts
+   472→                   SET importance = GREATEST(importance, $1), updated_at = NOW()
+   473→                   WHERE id = $2""",
+   474→                importance, existing,
+   475→            )
+   476→        else:
+   477→            await conn.execute(
+   478→                """INSERT INTO memory_facts (user_id, fact_type, fact_content, importance)
+   479→                   VALUES ($1, $2, $3, $4)""",
+   480→                user_id, fact_type, content, importance,
+   481→            )
+   482→    finally:
+   483→        await conn.close()
+   484→
+   485→
+   486→async def get_memory_facts(user_id: int, min_importance: int = 3) -> list[dict]:
+   487→    conn = await get_conn()
+   488→    try:
+   489→        rows = await conn.fetch(
+   490→            """SELECT fact_type, fact_content, importance FROM memory_facts
+   491→               WHERE user_id = $1 AND importance >= $2
+   492→               ORDER BY importance DESC, updated_at DESC LIMIT 10""",
+   493→            user_id, min_importance,
+   494→        )
+   495→        return [dict(r) for r in rows]
+   496→    finally:
+   497→        await conn.close()
+   498→
+   499→
+   500→# ─── Emotional Memory (НОВАЯ — концепция v2) ───
+   501→
+   502→async def save_emotional_memory(
+   503→    user_id: int, memory_type: str, content: str, context: str = "", importance: int = 3
+   504→):
+   505→    """Сохраняет эмоциональный факт (главная боль, близкий человек, обещание...)."""
+   506→    conn = await get_conn()
+   507→    try:
+   508→        # Дедупликация по типу и содержимому
+   509→        existing = await conn.fetchval(
+   510→            """SELECT id FROM emotional_memory
+   511→               WHERE user_id = $1 AND memory_type = $2 AND content = $3""",
+   512→            user_id, memory_type, content,
+   513→        )
+   514→        if existing:
+   515→            await conn.execute(
+   516→                """UPDATE emotional_memory
+   517→                   SET importance = GREATEST(importance, $1), context = $2, updated_at = NOW()
+   518→                   WHERE id = $3""",
+   519→                importance, context, existing,
+   520→            )
+   521→        else:
+   522→            await conn.execute(
+   523→                """INSERT INTO emotional_memory (user_id, memory_type, content, context, importance)
+   524→                   VALUES ($1, $2, $3, $4, $5)""",
+   525→                user_id, memory_type, content, context, importance,
+   526→            )
+   527→    finally:
+   528→        await conn.close()
+   529→
+   530→
+   531→async def get_emotional_memory(user_id: int, min_importance: int = 3) -> list[dict]:
+   532→    """Возвращает эмоциональные факты о пользователе."""
+   533→    conn = await get_conn()
+   534→    try:
+   535→        rows = await conn.fetch(
+   536→            """SELECT memory_type, content, context, importance FROM emotional_memory
+   537→               WHERE user_id = $1 AND importance >= $2
+   538→               ORDER BY importance DESC, updated_at DESC LIMIT 10""",
+   539→            user_id, min_importance,
+   540→        )
+   541→        return [dict(r) for r in rows]
+   542→    finally:
+   543→        await conn.close()
+   544→
+   545→
+   546→async def get_top_emotional_memory(user_id: int) -> Optional[dict]:
+   547→    """Самый важный эмоциональный факт (для приветствия возвращения)."""
+   548→    conn = await get_conn()
+   549→    try:
+   550→        row = await conn.fetchrow(
+   551→            """SELECT memory_type, content, importance FROM emotional_memory
+   552→               WHERE user_id = $1 ORDER BY importance DESC, updated_at DESC LIMIT 1""",
+   553→            user_id,
+   554→        )
+   555→        return dict(row) if row else None
+   556→    finally:
+   557→        await conn.close()
+   558→
+   559→
+   560→# ─── Free 1-card cooldown ───
+   561→
+   562→async def can_get_free_card(user_id: int, cooldown_hours: int = 24) -> bool:
+   563→    conn = await get_conn()
+   564→    try:
+   565→        last = await conn.fetchval(
+   566→            "SELECT last_free_card_at FROM users WHERE user_id = $1", user_id
+   567→        )
+   568→        if not last:
+   569→            return True
+   570→        if hasattr(last, "tzinfo") and last.tzinfo is None:
+   571→            last = last.replace(tzinfo=timezone.utc)
+   572→        diff = (datetime.now(timezone.utc) - last).total_seconds()
+   573→        return diff >= cooldown_hours * 3600
+   574→    finally:
+   575→        await conn.close()
+   576→
+   577→
+   578→async def mark_free_card_used(user_id: int):
+   579→    conn = await get_conn()
+   580→    try:
+   581→        await conn.execute(
+   582→            "UPDATE users SET last_free_card_at = NOW(), updated_at = NOW() WHERE user_id = $1",
+   583→            user_id,
+   584→        )
+   585→    finally:
+   586→        await conn.close()
+   587→
+   588→
+   589→# ─── Rate Limiting (через БД, не в памяти) ───
+   590→
+   591→async def check_rate_limit(user_id: int, min_interval_seconds: float = 2.0) -> bool:
+   592→    conn = await get_conn()
+   593→    try:
+   594→        row = await conn.fetchrow(
+   595→            "SELECT last_message_at FROM rate_limits WHERE user_id = $1", user_id
+   596→        )
+   597→        if row:
+   598→            last = row["last_message_at"]
+   599→            if last:
+   600→                from datetime import datetime as _dt, timezone as _tz
+   601→                if hasattr(last, "tzinfo") and last.tzinfo is None:
+   602→                    last = last.replace(tzinfo=_tz.utc)
+   603→                diff = (_dt.now(_tz.utc) - last).total_seconds()
+   604→                if diff < min_interval_seconds:
+   605→                    return False
+   606→        return True
+   607→    finally:
+   608→        await conn.close()
+   609→
+   610→
+   611→async def update_rate_limit(user_id: int):
+   612→    conn = await get_conn()
+   613→    try:
+   614→        await conn.execute(
+   615→            """INSERT INTO rate_limits (user_id, last_message_at)
+   616→               VALUES ($1, NOW())
+   617→               ON CONFLICT (user_id) DO UPDATE SET last_message_at = NOW()""",
+   618→            user_id,
+   619→        )
+   620→    finally:
+   621→        await conn.close()
+   622→
+   623→
+   624→# ─── Admin ───
+   625→
+   626→async def get_user_stats() -> list[dict]:
+   627→    conn = await get_conn()
+   628→    try:
+   629→        rows = await conn.fetch("""
+   630→            SELECT user_id, username, first_name, name,
+   631→                   crystals, state, message_count,
+   632→                   rudeness_count, is_blocked, created_at, last_seen_at,
+   633→                   onboarding_completed
+   634→            FROM users ORDER BY created_at DESC
+   635→        """)
+   636→        return [dict(r) for r in rows]
+   637→    finally:
+   638→        await conn.close()
+   639→
+   640→
+   641→# ─── Referrals (концепция v2 round 2) ───
+   642→
+   643→async def set_referred_by(user_id: int, referred_by: int):
+   644→    """Устанавливает реферера (только если ещё не установлен и не сам себя)."""
+   645→    if user_id == referred_by:
+   646→        return
+   647→    conn = await get_conn()
+   648→    try:
+   649→        await conn.execute(
+   650→            """UPDATE users SET referred_by = $1
+   651→               WHERE user_id = $2 AND referred_by IS NULL""",
+   652→            referred_by, user_id,
+   653→        )
+   654→    finally:
+   655→        await conn.close()
+   656→
+   657→
+   658→async def get_referral_count(user_id: int) -> int:
+   659→    """Сколько пользователей пришли по реферальной ссылке этого пользователя."""
+   660→    conn = await get_conn()
+   661→    try:
+   662→        count = await conn.fetchval(
+   663→            "SELECT COUNT(*) FROM users WHERE referred_by = $1", user_id
+   664→        )
+   665→        return count or 0
+   666→    finally:
+   667→        await conn.close()
+   668→
+   669→
+   670→async def mark_referral_reward_given(user_id: int):
+   671→    conn = await get_conn()
+   672→    try:
+   673→        await conn.execute(
+   674→            "UPDATE users SET referral_reward_given = TRUE WHERE user_id = $1",
+   675→            user_id,
+   676→        )
+   677→    finally:
+   678→        await conn.close()
+   679→
+   680→
+   681→async def was_referred(user_id: int) -> bool:
+   682→    conn = await get_conn()
+   683→    try:
+   684→        v = await conn.fetchval(
+   685→            "SELECT referred_by IS NOT NULL FROM users WHERE user_id = $1", user_id
+   686→        )
+   687→        return bool(v)
+   688→    finally:
+   689→        await conn.close()
+   690→
+   691→
+   692→# ─── Daily horoscope ───
+   693→
+   694→async def can_get_daily_horoscope(user_id: int) -> bool:
+   695→    """True, если сегодня пользователь ещё не получал daily horoscope.
+   696→    Используем CURRENT_DATE из PostgreSQL для консистентности с mark_daily_horoscope_used."""
+   697→    conn = await get_conn()
+   698→    try:
+   699→        result = await conn.fetchval(
+   700→            "SELECT (last_daily_horoscope_date IS NULL OR last_daily_horoscope_date < CURRENT_DATE) FROM users WHERE user_id = $1",
+   701→            user_id,
+   702→        )
+   703→        return bool(result)
+   704→    finally:
+   705→        await conn.close()
+   706→
+   707→
+   708→async def mark_daily_horoscope_used(user_id: int):
+   709→    conn = await get_conn()
+   710→    try:
+   711→        await conn.execute(
+   712→            "UPDATE users SET last_daily_horoscope_date = CURRENT_DATE WHERE user_id = $1",
+   713→            user_id,
+   714→        )
+   715→    finally:
+   716→        await conn.close()
+   717→
+   718→
+   719→async def set_daily_horoscope_opt_in(user_id: int, opt_in: bool):
+   720→    conn = await get_conn()
+   721→    try:
+   722→        await conn.execute(
+   723→            "UPDATE users SET daily_horoscope_opt_in = $1 WHERE user_id = $2",
+   724→            opt_in, user_id,
+   725→        )
+   726→    finally:
+   727→        await conn.close()
+   728→
+   729→
+   730→async def get_daily_horoscope_subscribers() -> list[dict]:
+   731→    """Пользователи, подписанные на daily horoscope и завершившие онбординг."""
+   732→    conn = await get_conn()
+   733→    try:
+   734→        rows = await conn.fetch("""
+   735→            SELECT user_id, name, first_name, birth_date, birth_time, birth_place
+   736→            FROM users
+   737→            WHERE daily_horoscope_opt_in = TRUE
+   738→              AND onboarding_completed = TRUE
+   739→              AND is_blocked = FALSE
+   740→              AND birth_date IS NOT NULL
+   741→            ORDER BY user_id
+   742→            LIMIT 100
+   743→        """)
+   744→        return [dict(r) for r in rows]
+   745→    finally:
+   746→        await conn.close()
+   747→
+   748→
+   749→# ─── Admin analytics (расширенная) ───
+   750→
+   751→async def get_admin_analytics() -> dict:
+   752→    """Сводная статистика для /stats. Оптимизировано — один запрос вместо 12."""
+   753→    conn = await get_conn()
+   754→    try:
+   755→        # Единый запрос с несколькими агрегатами — вместо 12 отдельных коннектов
+   756→        row = await conn.fetchrow("""
+   757→            SELECT
+   758→                (SELECT COUNT(*) FROM users) AS total_users,
+   759→                (SELECT COUNT(*) FROM users WHERE last_seen_at > NOW() - INTERVAL '24 hours') AS active_24h,
+   760→                (SELECT COUNT(*) FROM users WHERE last_seen_at > NOW() - INTERVAL '7 days') AS active_7d,
+   761→                (SELECT COUNT(*) FROM users WHERE onboarding_completed = TRUE) AS onboarding_done,
+   762→                (SELECT COALESCE(SUM(crystals), 0) FROM users) AS total_crystals,
+   763→                (SELECT COUNT(*) FROM conversations) AS total_messages,
+   764→                (SELECT COUNT(*) FROM transactions WHERE type = 'spend') AS paid_transactions,
+   765→                (SELECT COUNT(DISTINCT user_id) FROM transactions WHERE type = 'spend') AS paying_users,
+   766→                (SELECT COUNT(*) FROM users WHERE is_blocked = TRUE) AS blocked_users,
+   767→                (SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL) AS referral_users,
+   768→                (SELECT COUNT(*) FROM users WHERE daily_horoscope_opt_in = TRUE) AS daily_subscribers
+   769→        """)
+   770→
+   771→        total_users = row["total_users"] or 0
+   772→        paying_users = row["paying_users"] or 0
+   773→        conversion = round((paying_users / total_users * 100), 1) if total_users else 0.0
+   774→
+   775→        # Топ-5 активных (второй запрос)
+   776→        top_active = await conn.fetch("""
+   777→            SELECT name, first_name, username, message_count, crystals
+   778→            FROM users WHERE is_blocked = FALSE
+   779→            ORDER BY message_count DESC LIMIT 5
+   780→        """)
+   781→        top_active = [dict(r) for r in top_active]
+   782→
+   783→        return {
+   784→            "total_users": total_users,
+   785→            "active_24h": row["active_24h"] or 0,
+   786→            "active_7d": row["active_7d"] or 0,
+   787→            "onboarding_done": row["onboarding_done"] or 0,
+   788→            "total_crystals": row["total_crystals"] or 0,
+   789→            "total_messages": row["total_messages"] or 0,
+   790→            "paid_transactions": row["paid_transactions"] or 0,
+   791→            "paying_users": paying_users,
+   792→            "conversion_pct": conversion,
+   793→            "blocked_users": row["blocked_users"] or 0,
+   794→            "referral_users": row["referral_users"] or 0,
+   795→            "daily_subscribers": row["daily_subscribers"] or 0,
+   796→            "top_active": top_active,
+   797→        }
+   798→    finally:
+   799→        await conn.close()
+   800→
+   801→
+   802→# ─── GDPR: удаление данных пользователя ───
+   803→
+   804→async def delete_user_data(user_id: int) -> bool:
+   805→    """Полное удаление всех данных пользователя. Возвращает True при успехе."""
+   806→    conn = await get_conn()
+   807→    try:
+   808→        async with conn.transaction():
+   809→            # FK ON DELETE CASCADE сработает для conversations, memory_facts,
+   810→            # emotional_memory, transactions. rate_limits — без FK, удалим вручную.
+   811→            await conn.execute("DELETE FROM rate_limits WHERE user_id = $1", user_id)
+   812→            result = await conn.execute("DELETE FROM users WHERE user_id = $1", user_id)
+   813→            # result вида "DELETE 1" или "DELETE 0"
+   814→            return "1" in result.split()[-1] if result else False
+   815→    finally:
+   816→        await conn.close()
+   817→
+   818→
+   819→# ─── Round 5: карта дня (cooldown) ───
+   820→
+   821→async def can_get_card_of_day(user_id: int, cooldown_hours: int = 20) -> bool:
+   822→    """True, если пользователь может получить карту дня (прошёл cooldown)."""
+   823→    conn = await get_conn()
+   824→    try:
+   825→        last = await conn.fetchval(
+   826→            "SELECT last_card_of_day_at FROM users WHERE user_id = $1", user_id
+   827→        )
+   828→        if not last:
+   829→            return True
+   830→        if hasattr(last, "tzinfo") and last.tzinfo is None:
+   831→            last = last.replace(tzinfo=timezone.utc)
+   832→        diff = (datetime.now(timezone.utc) - last).total_seconds()
+   833→        return diff >= cooldown_hours * 3600
+   834→    finally:
+   835→        await conn.close()
+   836→
+   837→
+   838→async def mark_card_of_day_used(user_id: int):
+   839→    conn = await get_conn()
+   840→    try:
+   841→        await conn.execute(
+   842→            "UPDATE users SET last_card_of_day_at = NOW(), updated_at = NOW() WHERE user_id = $1",
+   843→            user_id,
+   844→        )
+   845→    finally:
+   846→        await conn.close()
+   847→
+   848→
+   849→# ─── Round 5: дни рождения (для cron) ───
+   850→
+   851→async def get_birthday_users(limit: int = 10) -> list[dict]:
+   852→    """Пользователи, у которых сегодня день рождения.
+   853→    Сравниваем только месяц+день, игнорируя год.
+   854→    Возвращает завершивших онбординг, не заблокированных."""
+   855→    conn = await get_conn()
+   856→    try:
+   857→        rows = await conn.fetch("""
+   858→            SELECT user_id, name, first_name, birth_date,
+   859→                   EXTRACT(YEAR FROM birth_date) AS birth_year
+   860→            FROM users
+   861→            WHERE birth_date IS NOT NULL
+   862→              AND onboarding_completed = TRUE
+   863→              AND is_blocked = FALSE
+   864→              AND EXTRACT(MONTH FROM birth_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+   865→              AND EXTRACT(DAY FROM birth_date) = EXTRACT(DAY FROM CURRENT_DATE)
+   866→            ORDER BY user_id
+   867→            LIMIT $1
+   868→        """, limit)
+   869→        return [dict(r) for r in rows]
+   870→    finally:
+   871→        await conn.close()
+   872→
+   873→
+   874→# ─── Round 5: рассылка администратора ───
+   875→
+   876→async def get_broadcast_recipients(batch_size: int = 25, offset: int = 0) -> list[int]:
+   877→    """Получает батч user_id для рассылки (не заблокированные, завершившие онбординг).
+   878→    Пагинация через offset — для последовательной обработки."""
+   879→    conn = await get_conn()
+   880→    try:
+   881→        rows = await conn.fetch("""
+   882→            SELECT user_id FROM users
+   883→            WHERE is_blocked = FALSE
+   884→              AND onboarding_completed = TRUE
+   885→            ORDER BY user_id
+   886→            LIMIT $1 OFFSET $2
+   887→        """, batch_size, offset)
+   888→        return [r["user_id"] for r in rows]
+   889→    finally:
+   890→        await conn.close()
+   891→
+   892→
+   893→async def count_broadcast_recipients() -> int:
+   894→    """Считает всех получателей рассылки."""
+   895→    conn = await get_conn()
+   896→    try:
+   897→        return await conn.fetchval(
+   898→            "SELECT COUNT(*) FROM users WHERE is_blocked = FALSE AND onboarding_completed = TRUE"
+   899→        ) or 0
+   900→    finally:
+   901→        await conn.close()
+   902→
+   903→
+   904→async def mark_broadcast_sent(user_id: int):
+   905→    """Отмечает, что пользователь получил последний бродкаст."""
+   906→    conn = await get_conn()
+   907→    try:
+   908→        await conn.execute(
+   909→            "UPDATE users SET last_broadcast_at = NOW() WHERE user_id = $1",
+   910→            user_id,
+   911→        )
+   912→    finally:
+   913→        await conn.close()
+   914→
