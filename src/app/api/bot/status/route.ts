@@ -17,7 +17,9 @@ export async function GET() {
       lastHeartbeat: hb.value,
       ageSeconds: Math.floor(ageMs / 1000),
     });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[bot/status] db unavailable:', msg.slice(0, 160));
+    return NextResponse.json({ ok: false, error: 'база недоступна', username: 'oracultetris_bot' });
   }
 }

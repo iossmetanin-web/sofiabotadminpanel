@@ -4,11 +4,17 @@ import { db } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const broadcasts = await db.broadcast.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 20,
-  });
-  return NextResponse.json({ broadcasts });
+  try {
+    const broadcasts = await db.broadcast.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return NextResponse.json({ broadcasts });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[broadcasts] db unavailable:', msg.slice(0, 160));
+    return NextResponse.json({ broadcasts: [] });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -28,7 +34,8 @@ export async function POST(req: NextRequest) {
       },
     });
     return NextResponse.json({ ok: true, id: broadcast.id, total, status: 'pending' });
-  } catch (e: any) {
-    return NextResponse.json({ error: `failed to enqueue: ${e.message}` }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: `failed to enqueue: ${msg}` }, { status: 500 });
   }
 }

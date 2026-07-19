@@ -7,17 +7,23 @@ export const dynamic = 'force-dynamic';
 // GET: list all config entries.
 // PATCH: update one or more config entries by key.
 export async function GET() {
-  const configs = await db.botConfig.findMany({
-    orderBy: { key: 'asc' },
-  });
-  return NextResponse.json({
-    settings: configs.map((c) => ({
-      id: c.id,
-      key: c.key,
-      value: c.value,
-      updatedAt: c.updatedAt,
-    })),
-  });
+  try {
+    const configs = await db.botConfig.findMany({
+      orderBy: { key: 'asc' },
+    });
+    return NextResponse.json({
+      settings: configs.map((c) => ({
+        id: c.id,
+        key: c.key,
+        value: c.value,
+        updatedAt: c.updatedAt,
+      })),
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[settings] db unavailable:', msg.slice(0, 160));
+    return NextResponse.json({ settings: [] });
+  }
 }
 
 export async function PATCH(req: NextRequest) {
@@ -32,7 +38,8 @@ export async function PATCH(req: NextRequest) {
       create: { id: `cfg_${key}`, key, value },
     });
     return NextResponse.json({ ok: true, setting: updated });
-  } catch (e: any) {
-    return NextResponse.json({ error: `failed to update: ${e.message}` }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: `failed to update: ${msg}` }, { status: 500 });
   }
 }

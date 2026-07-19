@@ -10,69 +10,86 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(50, parseInt(searchParams.get('limit') ?? '20', 10));
   const type = searchParams.get('type') ?? '';
 
-  const where = type ? { type } : {};
+  try {
+    const where = type ? { type } : {};
 
-  const [transactions, total, typeBreakdown, totalSpent, totalAdded, totalDailyBonus, totalReferral, totalAdminGift] = await Promise.all([
-    db.transaction.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-      include: {
-        user: { select: { name: true, firstName: true, username: true, telegramId: true } },
+    const [transactions, total, typeBreakdown, totalSpent, totalAdded, totalDailyBonus, totalReferral, totalAdminGift] = await Promise.all([
+      db.transaction.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: {
+          user: { select: { name: true, firstName: true, username: true, telegramId: true } },
+        },
+      }),
+      db.transaction.count({ where }),
+      db.transaction.groupBy({
+        by: ['type'],
+        _count: { type: true },
+        _sum: { amount: true },
+        orderBy: { _count: { type: 'desc' } },
+      }),
+      db.transaction.aggregate({ where: { type: 'spend' }, _sum: { amount: true }, _count: true }),
+      db.transaction.aggregate({ where: { type: 'add' }, _sum: { amount: true }, _count: true }),
+      db.transaction.aggregate({ where: { type: 'daily_bonus' }, _sum: { amount: true }, _count: true }),
+      db.transaction.aggregate({ where: { type: 'referral' }, _sum: { amount: true }, _count: true }),
+      db.transaction.aggregate({ where: { type: 'admin_gift' }, _sum: { amount: true }, _count: true }),
+    ]);
+
+    const totalInCirculation = await db.user.aggregate({ _sum: { crystals: true } });
+    const avgBalance = await db.user.aggregate({ _avg: { crystals: true } });
+    const zeroBalanceCount = await db.user.count({ where: { crystals: 0 } });
+
+    return NextResponse.json({
+      transactions: transactions.map((t) => ({
+        id: t.id,
+        userId: t.userId,
+        type: t.type,
+        amount: t.amount,
+        description: t.description,
+        balanceAfter: t.balanceAfter,
+        createdAt: t.createdAt,
+        user: t.user,
+      })),
+      total,
+      page,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      summary: {
+        totalSpent: totalSpent._sum.amount ?? 0,
+        totalSpentCount: totalSpent._count,
+        totalAdded: totalAdded._sum.amount ?? 0,
+        totalAddedCount: totalAdded._count,
+        totalDailyBonus: totalDailyBonus._sum.amount ?? 0,
+        totalDailyBonusCount: totalDailyBonus._count,
+        totalReferral: totalReferral._sum.amount ?? 0,
+        totalReferralCount: totalReferral._count,
+        totalAdminGift: totalAdminGift._sum.amount ?? 0,
+        totalAdminGiftCount: totalAdminGift._count,
+        totalInCirculation: totalInCirculation._sum.crystals ?? 0,
+        avgBalance: Math.round(avgBalance._avg.crystals ?? 0),
+        zeroBalanceUsers: zeroBalanceCount,
       },
-    }),
-    db.transaction.count({ where }),
-    db.transaction.groupBy({
-      by: ['type'],
-      _count: { type: true },
-      _sum: { amount: true },
-      orderBy: { _count: { type: 'desc' } },
-    }),
-    db.transaction.aggregate({ where: { type: 'spend' }, _sum: { amount: true }, _count: true }),
-    db.transaction.aggregate({ where: { type: 'add' }, _sum: { amount: true }, _count: true }),
-    db.transaction.aggregate({ where: { type: 'daily_bonus' }, _sum: { amount: true }, _count: true }),
-    db.transaction.aggregate({ where: { type: 'referral' }, _sum: { amount: true }, _count: true }),
-    db.transaction.aggregate({ where: { type: 'admin_gift' }, _sum: { amount: true }, _count: true }),
-  ]);
-
-  const totalInCirculation = await db.user.aggregate({ _sum: { crystals: true } });
-  const avgBalance = await db.user.aggregate({ _avg: { crystals: true } });
-  const zeroBalanceCount = await db.user.count({ where: { crystals: 0 } });
-
-  return NextResponse.json({
-    transactions: transactions.map((t) => ({
-      id: t.id,
-      userId: t.userId,
-      type: t.type,
-      amount: t.amount,
-      description: t.description,
-      balanceAfter: t.balanceAfter,
-      createdAt: t.createdAt,
-      user: t.user,
-    })),
-    total,
-    page,
-    totalPages: Math.max(1, Math.ceil(total / limit)),
-    summary: {
-      totalSpent: totalSpent._sum.amount ?? 0,
-      totalSpentCount: totalSpent._count,
-      totalAdded: totalAdded._sum.amount ?? 0,
-      totalAddedCount: totalAdded._count,
-      totalDailyBonus: totalDailyBonus._sum.amount ?? 0,
-      totalDailyBonusCount: totalDailyBonus._count,
-      totalReferral: totalReferral._sum.amount ?? 0,
-      totalReferralCount: totalReferral._count,
-      totalAdminGift: totalAdminGift._sum.amount ?? 0,
-      totalAdminGiftCount: totalAdminGift._count,
-      totalInCirculation: totalInCirculation._sum.crystals ?? 0,
-      avgBalance: Math.round(avgBalance._avg.crystals ?? 0),
-      zeroBalanceUsers: zeroBalanceCount,
-    },
-    typeBreakdown: typeBreakdown.map((tb) => ({
-      type: tb.type,
-      count: tb._count.type,
-      total: tb._sum.amount ?? 0,
-    })),
-  });
+      typeBreakdown: typeBreakdown.map((tb) => ({
+        type: tb.type,
+        count: tb._count.type,
+        total: tb._sum.amount ?? 0,
+      })),
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[economy] db unavailable:', msg.slice(0, 160));
+    return NextResponse.json({
+      transactions: [],
+      total: 0,
+      page,
+      totalPages: 0,
+      summary: {
+        totalSpent: 0, totalSpentCount: 0, totalAdded: 0, totalAddedCount: 0,
+        totalDailyBonus: 0, totalDailyBonusCount: 0, totalReferral: 0, totalReferralCount: 0,
+        totalAdminGift: 0, totalAdminGiftCount: 0, totalInCirculation: 0, avgBalance: 0, zeroBalanceUsers: 0,
+      },
+      typeBreakdown: [],
+    });
+  }
 }
