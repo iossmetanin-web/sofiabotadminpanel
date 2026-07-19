@@ -13,8 +13,8 @@ export function mainMenuKeyboard(u: UserDTO): InlineKeyboard {
   return new InlineKeyboard()
     .text("🔮 " + t(loc, "reading_menu_title").replace("📜 ", ""), "rd:menu").text(t(loc, "card_of_day"), "rd:cardday").text(t(loc, "free_card"), "rd:freecard").row()
     .text(t(loc, "menu_history"), "nav:history").text(t(loc, "menu_profile"), "nav:profile").text(`💎 ${u.crystals}`, "nav:balance").row()
-    .text(t(loc, "menu_settings"), "nav:settings").text(t(loc, "menu_help"), "nav:help").row()
-    .text("🌙 " + t(loc, "affirmation_cmd_desc").replace(/^🌙 /, ""), "nav:affirmation").text(t(loc, "miniapp_btn"), "nav:miniapp");
+    .text("💭 " + t(loc, "dream_cmd_desc").replace(/^💭 /, ""), "nav:dream").text(t(loc, "menu_settings"), "nav:settings").row()
+    .text(t(loc, "menu_help"), "nav:help").text(t(loc, "miniapp_btn"), "nav:miniapp");
 }
 
 export function backHomeKeyboard(loc: Locale = "ru"): InlineKeyboard {
@@ -31,6 +31,7 @@ export function readingMenuKeyboard(loc: Locale = "ru"): InlineKeyboard {
     .text(`${t(loc, "reading_love")} · 2💎`, "rd:pick:tarot_love").row()
     .text(`${t(loc, "reading_career")} · 2💎`, "rd:pick:tarot_career").row()
     .text(`${t(loc, "reading_decision")} · 2💎`, "rd:pick:tarot_decision").row()
+    .text(`${t(loc, "yes_no_cost")}`, "rd:yesno").row()
     .text(`${t(loc, "reading_small")} · 1💎`, "rd:pick:tarot_small").row()
     .text(`${t(loc, "reading_full")} · 3💎`, "rd:pick:tarot_full").row()
     .text(`${t(loc, "reading_horoscope")} · 2💎`, "rd:pick:horoscope").row()

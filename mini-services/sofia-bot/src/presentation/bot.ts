@@ -14,7 +14,7 @@ import {
 
 import {
   cmdStart, cmdMenu, cmdProfile, cmdBalance, cmdHelp, cmdCancel, cmdAdmin,
-  cmdLang, cmdAffirmation,
+  cmdLang, cmdAffirmation, cmdDream,
 } from "./commands.js";
 import { handleMessage } from "./conversation.js";
 import { handleCallback } from "./callbacks.js";
@@ -41,6 +41,7 @@ export async function buildBot(depsValue: Deps): Promise<Bot> {
   bot.command("admin", cmdAdmin);
   bot.command("lang", cmdLang);
   bot.command("affirmation", cmdAffirmation);
+  bot.command("dream", cmdDream);
 
   // Inline mode (@sofia <query>) — viral entry from any chat. Requires inline mode
   // to be enabled via @BotFather (toggle /setinline). The handler is registered regardless;

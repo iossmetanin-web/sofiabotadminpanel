@@ -1,0 +1,1100 @@
+     1→'use client';
+     2→
+     3→import { useEffect, useState, useCallback, useMemo } from 'react';
+     4→import {
+     5→  Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter,
+     6→} from '@/components/ui/card';
+     7→import { Badge } from '@/components/ui/badge';
+     8→import { Button } from '@/components/ui/button';
+     9→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    10→import { Input } from '@/components/ui/input';
+    11→import { Textarea } from '@/components/ui/textarea';
+    12→import {
+    13→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    14→} from '@/components/ui/table';
+    15→import { Skeleton } from '@/components/ui/skeleton';
+    16→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+    17→import { toast } from 'sonner';
+    18→import {
+    19→  Users, MessageCircle, Sparkles, Gem, TrendingUp, Activity, Send,
+    20→  Bot, Heart, Moon, Star, Zap, ScrollText, CircleCheck, CircleAlert, RefreshCw,
+    21→  Flame, Crown, Calendar, Mail, Globe, Languages, Gift, ArrowUpRight, Clock,
+    22→  Sparkle, Layers, Eye,
+    23→} from 'lucide-react';
+    24→import { Sparkline, BarSparkline } from '@/components/sofia/Sparkline';
+    25→import { ZodiacWheel } from '@/components/sofia/ZodiacWheel';
+    26→import { ZODIAC_EMOJI } from '@/components/sofia/zodiac-data';
+    27→
+    28→type Stats = {
+    29→  users: { total: number; active24h: number; active7d: number; onboarded: number; blocked: number };
+    30→  activity: { totalMessages: number; totalReadings: number; broadcasts: number };
+    31→  economy: { crystalsSpent: number; crystalsInCirculation: number };
+    32→  funnel: { conversion: number; retention7d: number };
+    33→  readingsByType: { type: string; count: number }[];
+    34→};
+    35→
+    36→type UserRow = {
+    37→  id: string; telegramId: string; username: string | null; firstName: string | null;
+    38→  name: string | null; language: string;
+    39→  zodiacSign: string | null; onboardingCompleted: boolean;
+    40→  onboardingStep: string; crystals: number; messageCount: number; streakDays: number;
+    41→  isBlocked: boolean; isAdmin: boolean; lastSeenAt: string | null; createdAt: string;
+    42→};
+    43→
+    44→type ReadingRow = {
+    45→  id: string; type: string; question: string | null; cards: string;
+    46→  interpretation: string; cost: number; createdAt: string;
+    47→  user: { name: string | null; username: string | null; firstName: string | null; zodiacSign: string | null };
+    48→};
+    49→
+    50→type BroadcastRow = {
+    51→  id: string; text: string; sentCount: number; failedCount: number; total: number;
+    52→  status: string; createdAt: string;
+    53→  user: { username: string | null; firstName: string | null } | null;
+    54→};
+    55→
+    56→type ActivityBucket = {
+    57→  date: string; messages: number; sofiaMsgs: number; userMsgs: number;
+    58→  readings: number; newUsers: number; crystalsSpent: number;
+    59→};
+    60→
+    61→type StreakData = {
+    62→  topStreaks: { id: string; name: string; username: string | null; zodiacSign: string | null; streakDays: number; lastSeenAt: string | null }[];
+    63→  distribution: { bucket: string; count: number }[];
+    64→  dailyActive: { date: string; count: number }[];
+    65→  cardOfDayActiveUsers: number;
+    66→};
+    67→
+    68→type ReferralData = {
+    69→  leaderboard: { rank: number; referrer: { name: string | null; firstName: string | null; username: string | null; zodiacSign: string | null; createdAt: string } | null; referrals: number }[];
+    70→  totals: { totalReferrals: number; rewardedReferrals: number; usersWithReferrer: number; crystalsAwarded: number };
+    71→};
+    72→
+    73→type DigestData = {
+    74→  weekRange: { from: string; to: string };
+    75→  lastSentAt: string | null;
+    76→  stats: { newUsers: number; active7d: number; messages: number; readings: number; crystalsSpent: number };
+    77→  topUsers: { id: string; name: string; username: string | null; zodiacSign: string | null; messageCount: number; streakDays: number }[];
+    78→  readingsByType: { type: string; count: number }[];
+    79→  recentBroadcasts: { id: string; text: string; status: string; sentCount: number; failedCount: number; total: number; createdAt: string }[];
+    80→};
+    81→
+    82→const READING_LABELS: Record<string, string> = {
+    83→  fate_card: '🌟 Карта судьбы', tarot_small: '🃏 Малый', tarot_full: '🌑 Полный',
+    84→  tarot_love: '💑 Любовный', tarot_career: '💼 Карьера', tarot_decision: '🛤 Решение',
+    85→  horoscope: '♈ Гороскоп', single_card: '🃏 Одна карта', card_of_day: '🌙 Карта дня',
+    86→};
+    87→
+    88→const READING_COLORS: Record<string, string> = {
+    89→  fate_card: '#f59e0b', tarot_small: '#a78bfa', tarot_full: '#60a5fa',
+    90→  tarot_love: '#f472b6', tarot_career: '#34d399', tarot_decision: '#fb923c',
+    91→  horoscope: '#facc15', single_card: '#94a3b8', card_of_day: '#c084fc',
+    92→};
+    93→
+    94→function timeAgo(iso: string | null): string {
+    95→  if (!iso) return '—';
+    96→  const diff = Date.now() - new Date(iso).getTime();
+    97→  const m = Math.floor(diff / 60000);
+    98→  if (m < 1) return 'только что';
+    99→  if (m < 60) return `${m} мин назад`;
+   100→  const h = Math.floor(m / 60);
+   101→  if (h < 24) return `${h} ч назад`;
+   102→  const d = Math.floor(h / 24);
+   103→  if (d < 30) return `${d} дн назад`;
+   104→  return new Date(iso).toLocaleDateString('ru-RU');
+   105→}
+   106→
+   107→function shortDate(iso: string): string {
+   108→  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+   109→}
+   110→
+   111→export default function Page() {
+   112→  const [stats, setStats] = useState<Stats | null>(null);
+   113→  const [users, setUsers] = useState<UserRow[]>([]);
+   114→  const [usersTotal, setUsersTotal] = useState(0);
+   115→  const [usersPage, setUsersPage] = useState(1);
+   116→  const [usersTotalPages, setUsersTotalPages] = useState(1);
+   117→  const [search, setSearch] = useState('');
+   118→  const [readings, setReadings] = useState<ReadingRow[]>([]);
+   119→  const [broadcasts, setBroadcasts] = useState<BroadcastRow[]>([]);
+   120→  const [activity, setActivity] = useState<ActivityBucket[]>([]);
+   121→  const [streaks, setStreaks] = useState<StreakData | null>(null);
+   122→  const [referrals, setReferrals] = useState<ReferralData | null>(null);
+   123→  const [digest, setDigest] = useState<DigestData | null>(null);
+   124→  const [botStatus, setBotStatus] = useState<{ ok: boolean; username?: string; lastHeartbeat?: string; ageSeconds?: number; error?: string } | null>(null);
+   125→  const [loading, setLoading] = useState<Record<string, boolean>>({});
+   126→  const [broadcastText, setBroadcastText] = useState('');
+   127→  const [sending, setSending] = useState(false);
+   128→  const [activeTab, setActiveTab] = useState('overview');
+   129→
+   130→  const fetchStats = useCallback(async () => {
+   131→    setLoading((l) => ({ ...l, stats: true }));
+   132→    try { const res = await fetch('/api/stats'); const data = await res.json(); setStats(data); }
+   133→    catch (e: any) { toast.error('Не загрузилась статистика: ' + e.message); }
+   134→    finally { setLoading((l) => ({ ...l, stats: false })); }
+   135→  }, []);
+   136→
+   137→  const fetchUsers = useCallback(async (page: number, s: string) => {
+   138→    setLoading((l) => ({ ...l, users: true }));
+   139→    try {
+   140→      const res = await fetch(`/api/users?page=${page}&search=${encodeURIComponent(s)}`);
+   141→      const data = await res.json();
+   142→      setUsers(data.users); setUsersTotal(data.total); setUsersPage(data.page); setUsersTotalPages(data.totalPages);
+   143→    } catch { toast.error('Не загрузились пользователи'); }
+   144→    finally { setLoading((l) => ({ ...l, users: false })); }
+   145→  }, []);
+   146→
+   147→  const fetchReadings = useCallback(async () => {
+   148→    setLoading((l) => ({ ...l, readings: true }));
+   149→    try { const res = await fetch('/api/readings?limit=20'); const data = await res.json(); setReadings(data.readings); }
+   150→    catch { toast.error('Не загрузились расклады'); }
+   151→    finally { setLoading((l) => ({ ...l, readings: false })); }
+   152→  }, []);
+   153→
+   154→  const fetchBroadcasts = useCallback(async () => {
+   155→    setLoading((l) => ({ ...l, broadcasts: true }));
+   156→    try { const res = await fetch('/api/broadcasts'); const data = await res.json(); setBroadcasts(data.broadcasts); }
+   157→    catch { toast.error('Не загрузились рассылки'); }
+   158→    finally { setLoading((l) => ({ ...l, broadcasts: false })); }
+   159→  }, []);
+   160→
+   161→  const fetchActivity = useCallback(async () => {
+   162→    setLoading((l) => ({ ...l, activity: true }));
+   163→    try { const res = await fetch('/api/activity?days=14'); const data = await res.json(); setActivity(data.buckets ?? []); }
+   164→    catch { /* silent */ }
+   165→    finally { setLoading((l) => ({ ...l, activity: false })); }
+   166→  }, []);
+   167→
+   168→  const fetchStreaks = useCallback(async () => {
+   169→    setLoading((l) => ({ ...l, streaks: true }));
+   170→    try { const res = await fetch('/api/streaks'); const data = await res.json(); setStreaks(data); }
+   171→    catch { /* silent */ }
+   172→    finally { setLoading((l) => ({ ...l, streaks: false })); }
+   173→  }, []);
+   174→
+   175→  const fetchReferrals = useCallback(async () => {
+   176→    setLoading((l) => ({ ...l, referrals: true }));
+   177→    try { const res = await fetch('/api/referrals'); const data = await res.json(); setReferrals(data); }
+   178→    catch { /* silent */ }
+   179→    finally { setLoading((l) => ({ ...l, referrals: false })); }
+   180→  }, []);
+   181→
+   182→  const fetchDigest = useCallback(async () => {
+   183→    setLoading((l) => ({ ...l, digest: true }));
+   184→    try { const res = await fetch('/api/digest'); const data = await res.json(); setDigest(data); }
+   185→    catch { /* silent */ }
+   186→    finally { setLoading((l) => ({ ...l, digest: false })); }
+   187→  }, []);
+   188→
+   189→  const fetchBotStatus = useCallback(async () => {
+   190→    setLoading((l) => ({ ...l, bot: true }));
+   191→    try { const res = await fetch('/api/bot/status'); const data = await res.json(); setBotStatus(data); }
+   192→    catch { setBotStatus({ ok: false, error: 'недоступен' }); }
+   193→    finally { setLoading((l) => ({ ...l, bot: false })); }
+   194→  }, []);
+   195→
+   196→  useEffect(() => { fetchStats(); fetchBotStatus(); fetchActivity(); }, [fetchStats, fetchBotStatus, fetchActivity]);
+   197→  useEffect(() => { fetchUsers(1, ''); }, [fetchUsers]);
+   198→  useEffect(() => { fetchReadings(); fetchBroadcasts(); }, [fetchReadings, fetchBroadcasts]);
+   199→
+   200→  // Lazy-load tab data on tab change.
+   201→  useEffect(() => {
+   202→    if (activeTab === 'streaks' && !streaks) fetchStreaks();
+   203→    if (activeTab === 'digest' && !digest) fetchDigest();
+   204→    if (activeTab === 'overview' && !referrals) fetchReferrals();
+   205→  }, [activeTab, streaks, digest, referrals, fetchStreaks, fetchDigest, fetchReferrals]);
+   206→
+   207→  // Auto-refresh bot status every 30s.
+   208→  useEffect(() => {
+   209→    const t = setInterval(() => { fetchBotStatus(); }, 30_000);
+   210→    return () => clearInterval(t);
+   211→  }, [fetchBotStatus]);
+   212→
+   213→  const onSearch = (v: string) => { setSearch(v); fetchUsers(1, v); };
+   214→
+   215→  const sendBroadcast = async () => {
+   216→    if (!broadcastText.trim()) { toast.error('Введите текст рассылки'); return; }
+   217→    setSending(true);
+   218→    try {
+   219→      const res = await fetch('/api/broadcasts', {
+   220→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   221→        body: JSON.stringify({ text: broadcastText }),
+   222→      });
+   223→      const data = await res.json();
+   224→      if (res.ok) { toast.success(`Рассылка запущена (id: ${data.id}, получателей: ${data.total})`); setBroadcastText(''); fetchBroadcasts(); }
+   225→      else { toast.error(data.error ?? 'Ошибка'); }
+   226→    } catch (e: any) { toast.error('Не удалось отправить: ' + e.message); }
+   227→    finally { setSending(false); }
+   228→  };
+   229→
+   230→  // Derived: zodiac counts from users (best-effort).
+   231→  const zodiacCounts = useMemo(() => {
+   232→    const m: Record<string, number> = {};
+   233→    for (const u of users) if (u.zodiacSign) m[u.zodiacSign] = (m[u.zodiacSign] ?? 0) + 1;
+   234→    return m;
+   235→  }, [users]);
+   236→
+   237→  // Derived: sparkline data for activity.
+   238→  const msgSpark = activity.map((b) => b.messages);
+   239→  const readingsSpark = activity.map((b) => b.readings);
+   240→  const newUsersSpark = activity.map((b) => b.newUsers);
+   241→  const crystalsSpark = activity.map((b) => b.crystalsSpent);
+   242→
+   243→  return (
+   244→    <TooltipProvider delayDuration={200}>
+   245→      <div className="min-h-screen flex flex-col bg-stone-950 text-stone-100">
+   246→        {/* Header */}
+   247→        <header className="sticky top-0 z-50 border-b border-amber-900/30 bg-stone-950/85 backdrop-blur-xl">
+   248→          <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-4">
+   249→            <div className="flex items-center gap-3">
+   250→              <div className="relative w-11 h-11 rounded-full bg-gradient-to-br from-amber-600 via-amber-800 to-stone-900 flex items-center justify-center text-xl shadow-lg shadow-amber-900/40 sofia-glow">
+   251→                <span className="sofia-float">🔮</span>
+   252→              </div>
+   253→              <div>
+   254→                <h1 className="font-serif text-xl font-semibold tracking-tight leading-none">София</h1>
+   255→                <p className="text-xs text-stone-400 mt-0.5">мудрая ведунья · @{botStatus?.username ?? 'oracultetris_bot'}</p>
+   256→              </div>
+   257→            </div>
+   258→            <div className="flex items-center gap-2">
+   259→              <Tooltip>
+   260→                <TooltipTrigger asChild>
+   261→                  <Badge variant={botStatus?.ok ? 'default' : 'destructive'} className="gap-1.5 px-2.5 py-1 text-xs">
+   262→                    {botStatus?.ok ? <CircleCheck className="w-3 h-3" /> : <CircleAlert className="w-3 h-3" />}
+   263→                    {loading.bot ? '…' : botStatus?.ok ? `Онлайн · ${botStatus.ageSeconds ?? 0}s` : 'Оффлайн'}
+   264→                  </Badge>
+   265→                </TooltipTrigger>
+   266→                <TooltipContent>
+   267→                  {botStatus?.lastHeartbeat ? `Heartbeat: ${new Date(botStatus.lastHeartbeat).toLocaleString('ru-RU')}` : 'Нет данных'}
+   268→                </TooltipContent>
+   269→              </Tooltip>
+   270→              <Button variant="outline" size="sm" onClick={() => { fetchStats(); fetchBotStatus(); fetchActivity(); }} className="border-stone-700 text-stone-300 hover:bg-stone-800 hover:text-amber-200">
+   271→                <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading.stats || loading.bot ? 'animate-spin' : ''}`} /> Обновить
+   272→              </Button>
+   273→              <Button asChild size="sm" className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-md shadow-amber-900/30">
+   274→                <a href="https://t.me/oracultetris_bot" target="_blank" rel="noreferrer">
+   275→                  <Send className="w-3.5 h-3.5 mr-1.5" /> Открыть
+   276→                </a>
+   277→              </Button>
+   278→            </div>
+   279→          </div>
+   280→        </header>
+   281→
+   282→        <main className="flex-1 container mx-auto px-4 py-8 space-y-10">
+   283→          {/* Hero / Landing */}
+   284→          <section className="relative overflow-hidden rounded-3xl border border-amber-900/40 bg-gradient-to-br from-stone-900 via-stone-900 to-amber-950/40 p-8 md:p-12 sofia-fade-in">
+   285→            <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-amber-700/10 blur-3xl sofia-spark" />
+   286→            <div className="absolute -bottom-20 -left-20 w-56 h-56 rounded-full bg-emerald-800/10 blur-3xl" />
+   287→            <div className="absolute top-1/3 right-1/4 w-1 h-1 rounded-full bg-amber-300 sofia-spark" />
+   288→            <div className="absolute top-2/3 right-1/3 w-1 h-1 rounded-full bg-amber-200 sofia-spark" style={{ animationDelay: '0.7s' }} />
+   289→            <div className="absolute top-1/4 right-1/2 w-1 h-1 rounded-full bg-amber-100 sofia-spark" style={{ animationDelay: '1.4s' }} />
+   290→            <div className="relative max-w-3xl">
+   291→              <Badge variant="outline" className="mb-4 border-amber-700/50 text-amber-300 bg-amber-950/40 backdrop-blur-sm">
+   292→                <Moon className="w-3 h-3 mr-1.5" /> Telegram-бот · ИИ · Таро · Гороскопы · Двуязычный
+   293→              </Badge>
+   294→              <h2 className="font-serif text-4xl md:text-6xl font-bold leading-[1.05] mb-4 tracking-tight">
+   295→                Приди ко мне, когда <span className="bg-gradient-to-r from-amber-300 via-amber-400 to-amber-500 bg-clip-text text-transparent">на душе тяжело</span>
+   296→              </h2>
+   297→              <p className="text-base md:text-lg text-stone-300 mb-7 leading-relaxed max-w-2xl">
+   298→                Я — София, мудрая ведунья-хранительница. Помню тайгу и руки, что сушили травы, и одновременно —
+   299→                слова складываются сами, как река. Карты, гороскопы, душевные разговоры. Я помню о тебе и встречаю теплом.
+   300→              </p>
+   301→              <div className="flex flex-wrap gap-3 mb-8">
+   302→                <Button asChild size="lg" className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-lg shadow-amber-900/30">
+   303→                  <a href="https://t.me/oracultetris_bot" target="_blank" rel="noreferrer">
+   304→                    <Sparkles className="w-4 h-4 mr-2" /> Поговорить с Софией
+   305→                  </a>
+   306→                </Button>
+   307→                <a href="#dashboard" className="inline-flex items-center justify-center rounded-md border border-amber-700/40 bg-amber-950/20 backdrop-blur-sm px-6 py-3 text-sm font-medium text-amber-200 hover:bg-amber-950/40 transition-colors">
+   308→                  Админ-панель ↓
+   309→                </a>
+   310→              </div>
+   311→              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-xl">
+   312→                {[
+   313→                  { icon: ScrollText, label: '78 карт', sub: 'полная колода' },
+   314→                  { icon: Heart, label: 'Память', sub: 'помнит о тебе' },
+   315→                  { icon: Layers, label: '3 слоя', sub: 'личности' },
+   316→                  { icon: Globe, label: '2 языка', sub: 'RU · EN' },
+   317→                ].map((f, i) => (
+   318→                  <div key={i} className="text-center rounded-lg p-2 bg-stone-900/40 border border-stone-800/60">
+   319→                    <f.icon className="w-5 h-5 mx-auto text-amber-500 mb-1" />
+   320→                    <div className="text-sm font-semibold">{f.label}</div>
+   321→                    <div className="text-xs text-stone-500">{f.sub}</div>
+   322→                  </div>
+   323→                ))}
+   324→              </div>
+   325→            </div>
+   326→          </section>
+   327→
+   328→          {/* Dashboard */}
+   329→          <section id="dashboard" className="space-y-6">
+   330→            <div className="flex items-center justify-between flex-wrap gap-3">
+   331→              <div>
+   332→                <h3 className="font-serif text-2xl font-semibold">Админ-панель</h3>
+   333→                <p className="text-sm text-stone-400">Управление ботом, аналитика, расклады и рассылки</p>
+   334→              </div>
+   335→            </div>
+   336→
+   337→            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+   338→              <TabsList className="bg-stone-900/80 border border-stone-800 backdrop-blur-sm p-1 h-auto flex flex-wrap gap-1">
+   339→                <TabsTrigger value="overview" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   340→                  <Activity className="w-3.5 h-3.5 mr-1.5" /> Обзор
+   341→                </TabsTrigger>
+   342→                <TabsTrigger value="users" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   343→                  <Users className="w-3.5 h-3.5 mr-1.5" /> Пользователи
+   344→                </TabsTrigger>
+   345→                <TabsTrigger value="readings" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   346→                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Расклады
+   347→                </TabsTrigger>
+   348→                <TabsTrigger value="streaks" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   349→                  <Flame className="w-3.5 h-3.5 mr-1.5" /> Серии
+   350→                </TabsTrigger>
+   351→                <TabsTrigger value="digest" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   352→                  <Mail className="w-3.5 h-3.5 mr-1.5" /> Дайджест
+   353→                </TabsTrigger>
+   354→                <TabsTrigger value="broadcasts" className="data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
+   355→                  <Send className="w-3.5 h-3.5 mr-1.5" /> Рассылки
+   356→                </TabsTrigger>
+   357→              </TabsList>
+   358→
+   359→              {/* Overview */}
+   360→              <TabsContent value="overview" className="space-y-4">
+   361→                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   362→                  <StatCard icon={Users} label="Пользователей" value={stats?.users.total} loading={loading.stats}
+   363→                    accent="text-amber-400" sub={`${stats?.users.onboarded ?? 0} завершили онбординг`}
+   364→                    spark={newUsersSpark} sparkColor="#f59e0b" />
+   365→                  <StatCard icon={Activity} label="Активны 24ч" value={stats?.users.active24h} loading={loading.stats}
+   366→                    accent="text-emerald-400" sub={`${stats?.funnel.retention7d ?? 0}% удержание 7д`}
+   367→                    spark={msgSpark.slice(-7)} sparkColor="#10b981" />
+   368→                  <StatCard icon={MessageCircle} label="Сообщений" value={stats?.activity.totalMessages} loading={loading.stats}
+   369→                    accent="text-sky-300" sub="всего" spark={msgSpark} sparkColor="#7dd3fc" />
+   370→                  <StatCard icon={Gem} label="💎 Потрачено" value={stats?.economy.crystalsSpent} loading={loading.stats}
+   371→                    accent="text-amber-300" sub={`в обороте: ${stats?.economy.crystalsInCirculation ?? 0}`}
+   372→                    spark={crystalsSpark} sparkColor="#fbbf24" />
+   373→                </div>
+   374→
+   375→                <div className="grid lg:grid-cols-3 gap-4">
+   376→                  {/* Funnel */}
+   377→                  <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   378→                    <CardHeader>
+   379→                      <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   380→                        <TrendingUp className="w-4 h-4 text-amber-400" /> Воронка
+   381→                      </CardTitle>
+   382→                      <CardDescription className="text-stone-400">Конверсия и удержание</CardDescription>
+   383→                    </CardHeader>
+   384→                    <CardContent className="space-y-3">
+   385→                      <FunnelBar label="Всего пользователей" value={stats?.users.total ?? 0} max={stats?.users.total ?? 1} color="bg-stone-600" />
+   386→                      <FunnelBar label="Завершили онбординг" value={stats?.users.onboarded ?? 0} max={stats?.users.total ?? 1} color="bg-amber-600" />
+   387→                      <FunnelBar label="Активны 7 дней" value={stats?.users.active7d ?? 0} max={stats?.users.total ?? 1} color="bg-emerald-600" />
+   388→                      <FunnelBar label="Активны 24 часа" value={stats?.users.active24h ?? 0} max={stats?.users.total ?? 1} color="bg-emerald-500" />
+   389→                      <div className="pt-3 border-t border-stone-800 flex justify-between text-sm">
+   390→                        <span className="text-stone-400">Конверсия онбординга</span>
+   391→                        <span className="font-semibold text-amber-300 font-mono">{stats?.funnel.conversion ?? 0}%</span>
+   392→                      </div>
+   393→                    </CardContent>
+   394→                  </Card>
+   395→
+   396→                  {/* Zodiac wheel */}
+   397→                  <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   398→                    <CardHeader>
+   399→                      <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   400→                        <Star className="w-4 h-4 text-amber-400" /> Знаки зодиака
+   401→                      </CardTitle>
+   402→                      <CardDescription className="text-stone-400">Распределение по знакам</CardDescription>
+   403→                    </CardHeader>
+   404→                    <CardContent className="flex justify-center items-center py-2">
+   405→                      <ZodiacWheel counts={zodiacCounts} size={220} />
+   406→                    </CardContent>
+   407→                  </Card>
+   408→
+   409→                  {/* Readings by type */}
+   410→                  <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   411→                    <CardHeader>
+   412→                      <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   413→                        <Sparkles className="w-4 h-4 text-amber-400" /> Расклады по типам
+   414→                      </CardTitle>
+   415→                      <CardDescription className="text-stone-400">Что спрашивают чаще</CardDescription>
+   416→                    </CardHeader>
+   417→                    <CardContent className="space-y-2 max-h-64 overflow-y-auto sofia-scroll pr-1">
+   418→                      {loading.stats && <Skeleton className="h-8 w-full" />}
+   419→                      {stats?.readingsByType.length === 0 && !loading.stats && (
+   420→                        <p className="text-sm text-stone-500 text-center py-4">Пока нет раскладов</p>
+   421→                      )}
+   422→                      {stats?.readingsByType.map((r) => {
+   423→                        const max = stats.readingsByType[0]?.count ?? 1;
+   424→                        const color = READING_COLORS[r.type] ?? '#f59e0b';
+   425→                        return (
+   426→                          <div key={r.type} className="space-y-1">
+   427→                            <div className="flex items-center justify-between text-xs">
+   428→                              <span className="text-stone-300 truncate">{READING_LABELS[r.type] ?? r.type}</span>
+   429→                              <span className="font-mono text-stone-300">{r.count}</span>
+   430→                            </div>
+   431→                            <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
+   432→                              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
+   433→                            </div>
+   434→                          </div>
+   435→                        );
+   436→                      })}
+   437→                    </CardContent>
+   438→                  </Card>
+   439→                </div>
+   440→
+   441→                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   442→                  <StatCard icon={Sparkles} label="Раскладов всего" value={stats?.activity.totalReadings} loading={loading.stats} accent="text-amber-400" sub="" spark={readingsSpark} sparkColor="#f59e0b" />
+   443→                  <StatCard icon={Send} label="Рассылок" value={stats?.activity.broadcasts} loading={loading.stats} accent="text-stone-300" sub="" />
+   444→                  <StatCard icon={TrendingUp} label="Активны 7д" value={stats?.users.active7d} loading={loading.stats} accent="text-emerald-400" sub="" />
+   445→                  <StatCard icon={CircleAlert} label="Заблокировано" value={stats?.users.blocked} loading={loading.stats} accent="text-rose-400" sub="" />
+   446→                </div>
+   447→
+   448→                {/* Activity 14-day chart */}
+   449→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   450→                  <CardHeader>
+   451→                    <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   452→                      <Activity className="w-4 h-4 text-amber-400" /> Активность за 14 дней
+   453→                    </CardTitle>
+   454→                    <CardDescription className="text-stone-400">Сообщения и расклады по дням</CardDescription>
+   455→                  </CardHeader>
+   456→                  <CardContent>
+   457→                    {loading.activity ? (
+   458→                      <Skeleton className="h-48 w-full" />
+   459→                    ) : activity.length === 0 ? (
+   460→                      <p className="text-center text-stone-500 py-8">Нет данных за выбранный период</p>
+   461→                    ) : (
+   462→                      <div className="space-y-3">
+   463→                        <ActivityChart buckets={activity} />
+   464→                      </div>
+   465→                    )}
+   466→                  </CardContent>
+   467→                </Card>
+   468→
+   469→                {/* Referral mini-board */}
+   470→                {referrals && referrals.leaderboard.length > 0 && (
+   471→                  <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   472→                    <CardHeader>
+   473→                      <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   474→                        <Gift className="w-4 h-4 text-amber-400" /> Топ рефералов
+   475→                      </CardTitle>
+   476→                      <CardDescription className="text-stone-400">
+   477→                        Всего: {referrals.totals.totalReferrals} · 💎 начислено: {referrals.totals.crystalsAwarded}
+   478→                      </CardDescription>
+   479→                    </CardHeader>
+   480→                    <CardContent>
+   481→                      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+   482→                        {referrals.leaderboard.slice(0, 6).map((row) => (
+   483→                          <div key={row.rank} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
+   484→                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${row.rank === 1 ? 'bg-amber-600/30 text-amber-300' : row.rank === 2 ? 'bg-stone-500/30 text-stone-200' : row.rank === 3 ? 'bg-amber-900/30 text-amber-400' : 'bg-stone-800/50 text-stone-400'}`}>
+   485→                              {row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : row.rank}
+   486→                            </div>
+   487→                            <div className="flex-1 min-w-0">
+   488→                              <div className="text-sm font-medium truncate">
+   489→                                {row.referrer?.name ?? row.referrer?.firstName ?? '—'}
+   490→                              </div>
+   491→                              <div className="text-xs text-stone-500">
+   492→                                {row.referrals} {row.referrals === 1 ? 'приглашён' : 'приглашённых'}
+   493→                              </div>
+   494→                            </div>
+   495→                            <Gift className="w-4 h-4 text-amber-500" />
+   496→                          </div>
+   497→                        ))}
+   498→                      </div>
+   499→                    </CardContent>
+   500→                  </Card>
+   501→                )}
+   502→              </TabsContent>
+   503→
+   504→              {/* Users */}
+   505→              <TabsContent value="users" className="space-y-4">
+   506→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   507→                  <CardHeader>
+   508→                    <div className="flex items-center justify-between gap-3 flex-wrap">
+   509→                      <div>
+   510→                        <CardTitle className="text-stone-100 font-serif">Пользователи</CardTitle>
+   511→                        <CardDescription className="text-stone-400">Всего: {usersTotal}</CardDescription>
+   512→                      </div>
+   513→                      <Input placeholder="Поиск по имени/username…" value={search} onChange={(e) => onSearch(e.target.value)}
+   514→                        className="w-64 bg-stone-950 border-stone-700" />
+   515→                    </div>
+   516→                  </CardHeader>
+   517→                  <CardContent>
+   518→                    <div className="rounded-md border border-stone-800 max-h-[28rem] overflow-y-auto sofia-scroll">
+   519→                      <Table>
+   520→                        <TableHeader className="sticky top-0 bg-stone-900">
+   521→                          <TableRow className="border-stone-800 hover:bg-stone-900">
+   522→                            <TableHead className="text-stone-400">Имя</TableHead>
+   523→                            <TableHead className="text-stone-400">Username</TableHead>
+   524→                            <TableHead className="text-stone-400">Знак</TableHead>
+   525→                            <TableHead className="text-stone-400 text-center">🌐</TableHead>
+   526→                            <TableHead className="text-stone-400 text-right">💎</TableHead>
+   527→                            <TableHead className="text-stone-400 text-right">Сообщ.</TableHead>
+   528→                            <TableHead className="text-stone-400 text-right">🔥</TableHead>
+   529→                            <TableHead className="text-stone-400">Статус</TableHead>
+   530→                            <TableHead className="text-stone-400">Был в сети</TableHead>
+   531→                          </TableRow>
+   532→                        </TableHeader>
+   533→                        <TableBody>
+   534→                          {loading.users && Array.from({ length: 5 }).map((_, i) => (
+   535→                            <TableRow key={i}><TableCell colSpan={9}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
+   536→                          ))}
+   537→                          {!loading.users && users.map((u) => (
+   538→                            <TableRow key={u.id} className="border-stone-800 hover:bg-stone-900/60 transition-colors">
+   539→                              <TableCell className="font-medium text-stone-100">
+   540→                                <div className="flex items-center gap-2">
+   541→                                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-stone-700 to-stone-900 flex items-center justify-center text-xs">
+   542→                                    {(u.name ?? u.firstName ?? '?').slice(0, 1).toUpperCase()}
+   543→                                  </div>
+   544→                                  {u.name ?? u.firstName ?? '—'}
+   545→                                </div>
+   546→                              </TableCell>
+   547→                              <TableCell className="text-stone-400">{u.username ? `@${u.username}` : '—'}</TableCell>
+   548→                              <TableCell>{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : '—'}</TableCell>
+   549→                              <TableCell className="text-center">
+   550→                                <Tooltip>
+   551→                                  <TooltipTrigger>
+   552→                                    <Badge variant="outline" className="text-xs border-stone-700 text-stone-400">
+   553→                                      {u.language === 'en' ? '🇬🇧' : '🇷🇺'}
+   554→                                    </Badge>
+   555→                                  </TooltipTrigger>
+   556→                                  <TooltipContent>{u.language === 'en' ? 'English' : 'Русский'}</TooltipContent>
+   557→                                </Tooltip>
+   558→                              </TableCell>
+   559→                              <TableCell className="text-right font-mono text-amber-300">{u.crystals}</TableCell>
+   560→                              <TableCell className="text-right font-mono">{u.messageCount}</TableCell>
+   561→                              <TableCell className="text-right font-mono">
+   562→                                {u.streakDays > 0 ? (
+   563→                                  <span className="inline-flex items-center gap-0.5 text-orange-400">
+   564→                                    <Flame className="w-3 h-3" /> {u.streakDays}
+   565→                                  </span>
+   566→                                ) : '0'}
+   567→                              </TableCell>
+   568→                              <TableCell>
+   569→                                {u.isBlocked ? <Badge variant="destructive" className="text-xs">блок</Badge>
+   570→                                  : u.onboardingCompleted ? <Badge className="text-xs bg-emerald-900/60">активен</Badge>
+   571→                                  : <Badge variant="outline" className="text-xs border-stone-600 text-stone-400">{u.onboardingStep}</Badge>}
+   572→                                {u.isAdmin && <Badge className="text-xs ml-1 bg-amber-900/60">админ</Badge>}
+   573→                              </TableCell>
+   574→                              <TableCell className="text-stone-400 text-xs">{timeAgo(u.lastSeenAt)}</TableCell>
+   575→                            </TableRow>
+   576→                          ))}
+   577→                          {!loading.users && users.length === 0 && (
+   578→                            <TableRow><TableCell colSpan={9} className="text-center text-stone-500 py-8">Пользователей пока нет</TableCell></TableRow>
+   579→                          )}
+   580→                        </TableBody>
+   581→                      </Table>
+   582→                    </div>
+   583→                    {usersTotalPages > 1 && (
+   584→                      <div className="flex items-center justify-between mt-3">
+   585→                        <Button variant="outline" size="sm" disabled={usersPage <= 1} onClick={() => fetchUsers(usersPage - 1, search)} className="border-stone-700 text-stone-300">← Назад</Button>
+   586→                        <span className="text-sm text-stone-400">{usersPage} / {usersTotalPages}</span>
+   587→                        <Button variant="outline" size="sm" disabled={usersPage >= usersTotalPages} onClick={() => fetchUsers(usersPage + 1, search)} className="border-stone-700 text-stone-300">Вперёд →</Button>
+   588→                      </div>
+   589→                    )}
+   590→                  </CardContent>
+   591→                </Card>
+   592→              </TabsContent>
+   593→
+   594→              {/* Readings */}
+   595→              <TabsContent value="readings" className="space-y-4">
+   596→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   597→                  <CardHeader>
+   598→                    <CardTitle className="text-stone-100 font-serif">Последние расклады</CardTitle>
+   599→                    <CardDescription className="text-stone-400">{readings.length} недавних</CardDescription>
+   600→                  </CardHeader>
+   601→                  <CardContent>
+   602→                    <div className="space-y-3 max-h-[36rem] overflow-y-auto sofia-scroll pr-1">
+   603→                      {loading.readings && Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+   604→                      {!loading.readings && readings.length === 0 && (
+   605→                        <p className="text-center text-stone-500 py-8">Раскладов пока нет. Откройте бота и сделайте первый расклад!</p>
+   606→                      )}
+   607→                      {readings.map((r) => {
+   608→                        const color = READING_COLORS[r.type] ?? '#f59e0b';
+   609→                        return (
+   610→                          <div key={r.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-colors">
+   611→                            <div className="flex items-center justify-between mb-1.5 gap-2">
+   612→                              <div className="flex items-center gap-2 min-w-0">
+   613→                                <div className="w-1 h-5 rounded-full" style={{ background: color }} />
+   614→                                <Badge variant="outline" className="border-stone-700 text-stone-300 text-xs">
+   615→                                  {READING_LABELS[r.type] ?? r.type}
+   616→                                </Badge>
+   617→                                {r.cost > 0 && <Badge className="bg-amber-950/60 text-amber-300 text-xs">{r.cost} 💎</Badge>}
+   618→                              </div>
+   619→                              <span className="text-xs text-stone-500 whitespace-nowrap">{timeAgo(r.createdAt)}</span>
+   620→                            </div>
+   621→                            <div className="text-xs text-stone-400 mb-1.5 flex items-center gap-1">
+   622→                              <Eye className="w-3 h-3" />
+   623→                              {r.user.name ?? r.user.firstName ?? '—'}
+   624→                              {r.user.zodiacSign ? ` · ${ZODIAC_EMOJI[r.user.zodiacSign] ?? ''} ${r.user.zodiacSign}` : ''}
+   625→                            </div>
+   626→                            <p className="text-sm text-stone-300 line-clamp-3 leading-relaxed">{r.interpretation}</p>
+   627→                          </div>
+   628→                        );
+   629→                      })}
+   630→                    </div>
+   631→                  </CardContent>
+   632→                </Card>
+   633→              </TabsContent>
+   634→
+   635→              {/* Streaks */}
+   636→              <TabsContent value="streaks" className="space-y-4">
+   637→                {!streaks ? (
+   638→                  <Card className="bg-stone-900/60 border-stone-800">
+   639→                    <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
+   640→                  </Card>
+   641→                ) : (
+   642→                  <>
+   643→                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   644→                      <StatCard icon={Flame} label="Карта дня (7д)" value={streaks.cardOfDayActiveUsers} accent="text-orange-400" sub="активных" />
+   645→                      <StatCard icon={Crown} label="Макс. серия" value={streaks.topStreaks[0]?.streakDays ?? 0} accent="text-amber-400" sub="дней подряд" />
+   646→                      <StatCard icon={Users} label="С серией >0" value={streaks.distribution.filter((d) => d.bucket !== '0').reduce((a, b) => a + b.count, 0)} accent="text-emerald-400" sub="пользователей" />
+   647→                      <StatCard icon={Calendar} label="DAU сегодня" value={streaks.dailyActive[streaks.dailyActive.length - 1]?.count ?? 0} accent="text-sky-300" sub="по lastActivityDay" />
+   648→                    </div>
+   649→
+   650→                    <div className="grid lg:grid-cols-2 gap-4">
+   651→                      <Card className="bg-stone-900/60 border-stone-800">
+   652→                        <CardHeader>
+   653→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   654→                            <Crown className="w-4 h-4 text-amber-400" /> Топ серий
+   655→                          </CardTitle>
+   656→                          <CardDescription className="text-stone-400">Самые преданные пользователи</CardDescription>
+   657→                        </CardHeader>
+   658→                        <CardContent className="space-y-2 max-h-72 overflow-y-auto sofia-scroll pr-1">
+   659→                          {streaks.topStreaks.length === 0 && (
+   660→                            <p className="text-center text-stone-500 py-8">Пока никто не набрал серию</p>
+   661→                          )}
+   662→                          {streaks.topStreaks.map((u, i) => (
+   663→                            <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
+   664→                              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${i === 0 ? 'bg-amber-600/30 text-amber-300' : i === 1 ? 'bg-stone-500/30 text-stone-200' : i === 2 ? 'bg-amber-900/30 text-amber-400' : 'bg-stone-800/50 text-stone-400'}`}>
+   665→                                {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}
+   666→                              </div>
+   667→                              <div className="flex-1 min-w-0">
+   668→                                <div className="text-sm font-medium truncate">{u.name}</div>
+   669→                                <div className="text-xs text-stone-500">
+   670→                                  {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+   671→                                </div>
+   672→                              </div>
+   673→                              <div className="text-right">
+   674→                                <div className="font-mono text-orange-400 text-lg flex items-center gap-1">
+   675→                                  <Flame className="w-4 h-4" />{u.streakDays}
+   676→                                </div>
+   677→                                <div className="text-xs text-stone-500">{timeAgo(u.lastSeenAt)}</div>
+   678→                              </div>
+   679→                            </div>
+   680→                          ))}
+   681→                        </CardContent>
+   682→                      </Card>
+   683→
+   684→                      <Card className="bg-stone-900/60 border-stone-800">
+   685→                        <CardHeader>
+   686→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   687→                            <Flame className="w-4 h-4 text-orange-400" /> Распределение серий
+   688→                          </CardTitle>
+   689→                          <CardDescription className="text-stone-400">Сколько пользователей в каждой категории</CardDescription>
+   690→                        </CardHeader>
+   691→                        <CardContent className="space-y-3">
+   692→                          {streaks.distribution.map((d) => {
+   693→                            const max = Math.max(...streaks.distribution.map((x) => x.count), 1);
+   694→                            const pct = (d.count / max) * 100;
+   695→                            const barColor = d.bucket === '0' ? 'bg-stone-600' : d.bucket === '1-3' ? 'bg-amber-700' : d.bucket === '4-7' ? 'bg-amber-600' : d.bucket === '8-14' ? 'bg-orange-600' : d.bucket === '15-30' ? 'bg-orange-500' : 'bg-red-500';
+   696→                            return (
+   697→                              <div key={d.bucket} className="space-y-1">
+   698→                                <div className="flex items-center justify-between text-xs">
+   699→                                  <span className="text-stone-400">{d.bucket === '0' ? 'Без серии' : `${d.bucket} дн.`}</span>
+   700→                                  <span className="font-mono text-stone-300">{d.count}</span>
+   701→                                </div>
+   702→                                <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+   703→                                  <div className={`h-full ${barColor} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+   704→                                </div>
+   705→                              </div>
+   706→                            );
+   707→                          })}
+   708→                        </CardContent>
+   709→                      </Card>
+   710→                    </div>
+   711→
+   712→                    <Card className="bg-stone-900/60 border-stone-800">
+   713→                      <CardHeader>
+   714→                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   715→                          <Calendar className="w-4 h-4 text-sky-400" /> DAU за 14 дней
+   716→                        </CardTitle>
+   717→                        <CardDescription className="text-stone-400">Daily Active Users по lastActivityDay</CardDescription>
+   718→                      </CardHeader>
+   719→                      <CardContent>
+   720→                        <div className="flex items-end gap-1 h-32">
+   721→                          {streaks.dailyActive.map((d) => {
+   722→                            const max = Math.max(...streaks.dailyActive.map((x) => x.count), 1);
+   723→                            const h = (d.count / max) * 100;
+   724→                            return (
+   725→                              <Tooltip key={d.date}>
+   726→                                <TooltipTrigger asChild>
+   727→                                  <div className="flex-1 group cursor-pointer">
+   728→                                    <div
+   729→                                      className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/70 group-hover:from-amber-800/60 group-hover:to-amber-400/90 transition-all"
+   730→                                      style={{ height: `${Math.max(2, h)}%` }}
+   731→                                    />
+   732→                                  </div>
+   733→                                </TooltipTrigger>
+   734→                                <TooltipContent>
+   735→                                  <div className="text-xs">
+   736→                                    <div className="font-mono">{shortDate(d.date)}</div>
+   737→                                    <div className="text-amber-300">{d.count} активных</div>
+   738→                                  </div>
+   739→                                </TooltipContent>
+   740→                              </Tooltip>
+   741→                            );
+   742→                          })}
+   743→                        </div>
+   744→                        <div className="flex justify-between mt-2 text-xs text-stone-500">
+   745→                          <span>{shortDate(streaks.dailyActive[0]?.date ?? new Date().toISOString())}</span>
+   746→                          <span>{shortDate(streaks.dailyActive[streaks.dailyActive.length - 1]?.date ?? new Date().toISOString())}</span>
+   747→                        </div>
+   748→                      </CardContent>
+   749→                    </Card>
+   750→                  </>
+   751→                )}
+   752→              </TabsContent>
+   753→
+   754→              {/* Digest */}
+   755→              <TabsContent value="digest" className="space-y-4">
+   756→                {!digest ? (
+   757→                  <Card className="bg-stone-900/60 border-stone-800">
+   758→                    <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
+   759→                  </Card>
+   760→                ) : (
+   761→                  <>
+   762→                    <Card className="bg-gradient-to-br from-stone-900 via-stone-900 to-amber-950/30 border-amber-900/40 backdrop-blur-sm">
+   763→                      <CardHeader>
+   764→                        <div className="flex items-center justify-between gap-3 flex-wrap">
+   765→                          <div>
+   766→                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2 text-xl">
+   767→                              <Mail className="w-5 h-5 text-amber-400" /> Недельный дайджест
+   768→                            </CardTitle>
+   769→                            <CardDescription className="text-stone-400">
+   770→                              {new Date(digest.weekRange.from).toLocaleDateString('ru-RU')} — {new Date(digest.weekRange.to).toLocaleDateString('ru-RU')}
+   771→                            </CardDescription>
+   772→                          </div>
+   773→                          {digest.lastSentAt ? (
+   774→                            <Badge variant="outline" className="border-emerald-700/50 text-emerald-300 bg-emerald-950/30">
+   775→                              <Clock className="w-3 h-3 mr-1" /> Отправлен: {timeAgo(digest.lastSentAt)}
+   776→                            </Badge>
+   777→                          ) : (
+   778→                            <Badge variant="outline" className="border-amber-700/50 text-amber-300 bg-amber-950/30">
+   779→                              <Clock className="w-3 h-3 mr-1" /> Ещё не отправлялся на этой неделе
+   780→                            </Badge>
+   781→                          )}
+   782→                        </div>
+   783→                      </CardHeader>
+   784→                      <CardContent>
+   785→                        <p className="text-sm text-stone-300 leading-relaxed mb-4 italic font-serif">
+   786→                          🌙 Каждый воскресенье София автоматически собирает недельную сводку и отправляет её всем админам.
+   787→                          Ниже — превью того, что попадёт в следующий дайджест.
+   788→                        </p>
+   789→                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+   790→                          <DigestStat icon={Users} label="Новых" value={digest.stats.newUsers} color="text-amber-400" />
+   791→                          <DigestStat icon={Activity} label="Активны 7д" value={digest.stats.active7d} color="text-emerald-400" />
+   792→                          <DigestStat icon={MessageCircle} label="Сообщений" value={digest.stats.messages} color="text-sky-300" />
+   793→                          <DigestStat icon={Sparkles} label="Раскладов" value={digest.stats.readings} color="text-amber-300" />
+   794→                          <DigestStat icon={Gem} label="💎 Потрачено" value={digest.stats.crystalsSpent} color="text-amber-500" />
+   795→                        </div>
+   796→                      </CardContent>
+   797→                    </Card>
+   798→
+   799→                    <div className="grid lg:grid-cols-2 gap-4">
+   800→                      <Card className="bg-stone-900/60 border-stone-800">
+   801→                        <CardHeader>
+   802→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   803→                            <Crown className="w-4 h-4 text-amber-400" /> Топ-5 за неделю
+   804→                          </CardTitle>
+   805→                        </CardHeader>
+   806→                        <CardContent className="space-y-2">
+   807→                          {digest.topUsers.length === 0 && <p className="text-center text-stone-500 py-6">Нет активных пользователей</p>}
+   808→                          {digest.topUsers.map((u, i) => (
+   809→                            <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
+   810→                              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-700/40 to-stone-800 flex items-center justify-center text-xs font-bold text-amber-300">
+   811→                                {i + 1}
+   812→                              </div>
+   813→                              <div className="flex-1 min-w-0">
+   814→                                <div className="text-sm font-medium truncate">{u.name}</div>
+   815→                                <div className="text-xs text-stone-500">
+   816→                                  {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+   817→                                </div>
+   818→                              </div>
+   819→                              <div className="text-right text-xs">
+   820→                                <div className="font-mono text-stone-200">{u.messageCount} сообщ.</div>
+   821→                                {u.streakDays > 0 && <div className="text-orange-400">🔥 {u.streakDays}</div>}
+   822→                              </div>
+   823→                            </div>
+   824→                          ))}
+   825→                        </CardContent>
+   826→                      </Card>
+   827→
+   828→                      <Card className="bg-stone-900/60 border-stone-800">
+   829→                        <CardHeader>
+   830→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   831→                            <Sparkles className="w-4 h-4 text-amber-400" /> Расклады за неделю
+   832→                          </CardTitle>
+   833→                        </CardHeader>
+   834→                        <CardContent className="space-y-2">
+   835→                          {digest.readingsByType.length === 0 && <p className="text-center text-stone-500 py-6">Не было раскладов</p>}
+   836→                          {digest.readingsByType.map((r) => {
+   837→                            const max = digest.readingsByType[0]?.count ?? 1;
+   838→                            const color = READING_COLORS[r.type] ?? '#f59e0b';
+   839→                            return (
+   840→                              <div key={r.type} className="space-y-1">
+   841→                                <div className="flex items-center justify-between text-xs">
+   842→                                  <span className="text-stone-300">{READING_LABELS[r.type] ?? r.type}</span>
+   843→                                  <span className="font-mono text-stone-300">{r.count}</span>
+   844→                                </div>
+   845→                                <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
+   846→                                  <div className="h-full rounded-full" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
+   847→                                </div>
+   848→                              </div>
+   849→                            );
+   850→                          })}
+   851→                        </CardContent>
+   852→                      </Card>
+   853→                    </div>
+   854→
+   855→                    {digest.recentBroadcasts.length > 0 && (
+   856→                      <Card className="bg-stone-900/60 border-stone-800">
+   857→                        <CardHeader>
+   858→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   859→                            <Send className="w-4 h-4 text-amber-400" /> Рассылки на этой неделе
+   860→                          </CardTitle>
+   861→                        </CardHeader>
+   862→                        <CardContent className="space-y-2">
+   863→                          {digest.recentBroadcasts.map((b) => (
+   864→                            <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+   865→                              <div className="flex items-center justify-between mb-1">
+   866→                                <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
+   867→                                  {b.status === 'done' ? '✓ отправлено' : b.status}
+   868→                                </Badge>
+   869→                                <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
+   870→                              </div>
+   871→                              <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
+   872→                              <p className="text-xs text-stone-500">Отправлено: {b.sentCount} / {b.total} · ошибок: {b.failedCount}</p>
+   873→                            </div>
+   874→                          ))}
+   875→                        </CardContent>
+   876→                      </Card>
+   877→                    )}
+   878→                  </>
+   879→                )}
+   880→              </TabsContent>
+   881→
+   882→              {/* Broadcasts */}
+   883→              <TabsContent value="broadcasts" className="space-y-4">
+   884→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   885→                  <CardHeader>
+   886→                    <CardTitle className="text-stone-100 font-serif">Новая рассылка</CardTitle>
+   887→                    <CardDescription className="text-stone-400">Отправить сообщение всем пользователям</CardDescription>
+   888→                  </CardHeader>
+   889→                  <CardContent className="space-y-3">
+   890→                    <Textarea placeholder="Текст рассылки…" value={broadcastText} onChange={(e) => setBroadcastText(e.target.value)}
+   891→                      rows={4} className="bg-stone-950 border-stone-700 resize-none" />
+   892→                    <div className="flex items-center justify-between gap-3 flex-wrap">
+   893→                      <p className="text-xs text-stone-500">
+   894→                        💡 Поддерживается HTML-форматирование. Рассылка отправится асинхронно — бот берёт её из БД каждые 8 секунд.
+   895→                      </p>
+   896→                      <Button onClick={sendBroadcast} disabled={sending} className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-md shadow-amber-900/30">
+   897→                        <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} /> {sending ? 'Отправка…' : 'Отправить'}
+   898→                      </Button>
+   899→                    </div>
+   900→                  </CardContent>
+   901→                </Card>
+   902→
+   903→                <Card className="bg-stone-900/60 border-stone-800">
+   904→                  <CardHeader>
+   905→                    <CardTitle className="text-stone-100 font-serif">История рассылок</CardTitle>
+   906→                  </CardHeader>
+   907→                  <CardContent>
+   908→                    <div className="space-y-2 max-h-64 overflow-y-auto sofia-scroll pr-1">
+   909→                      {loading.broadcasts && <Skeleton className="h-16 w-full" />}
+   910→                      {!loading.broadcasts && broadcasts.length === 0 && (
+   911→                        <p className="text-center text-stone-500 py-4">Рассылок пока не было</p>
+   912→                      )}
+   913→                      {broadcasts.map((b) => (
+   914→                        <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-colors">
+   915→                          <div className="flex items-center justify-between mb-1">
+   916→                            <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
+   917→                              {b.status === 'done' ? '✓ отправлено' : b.status}
+   918→                            </Badge>
+   919→                            <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
+   920→                          </div>
+   921→                          <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
+   922→                          <div className="flex items-center gap-3 text-xs text-stone-500">
+   923→                            <span>Отправлено: {b.sentCount} / {b.total}</span>
+   924→                            {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+   925→                          </div>
+   926→                        </div>
+   927→                      ))}
+   928→                    </div>
+   929→                  </CardContent>
+   930→                </Card>
+   931→              </TabsContent>
+   932→            </Tabs>
+   933→          </section>
+   934→
+   935→          {/* Architecture summary */}
+   936→          <section className="grid md:grid-cols-3 gap-4">
+   937→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   938→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Bot className="w-4 h-4 text-amber-500" /> Архитектура</CardTitle></CardHeader>
+   939→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   940→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Clean Architecture (4 слоя)</p>
+   941→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> grammY + TypeScript + Prisma</p>
+   942→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> z-ai-web-dev-sdk для ИИ</p>
+   943→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> FSM с сохранением в БД</p>
+   944→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Mini-service на порту 3003</p>
+   945→              </CardContent>
+   946→            </Card>
+   947→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   948→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Heart className="w-4 h-4 text-rose-400" /> Личность</CardTitle></CardHeader>
+   949→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   950→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Хранительница — тепло, безопасность</p>
+   951→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Наблюдатель — мягкая психология</p>
+   952→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Проводник — карты как зеркало</p>
+   953→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Нравственный кодекс</p>
+   954→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Эмоциональная память</p>
+   955→              </CardContent>
+   956→            </Card>
+   957→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   958→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Zap className="w-4 h-4 text-amber-400" /> Возможности</CardTitle></CardHeader>
+   959→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   960→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 6 типов раскладов Таро</p>
+   961→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Карта дня + аффирмации</p>
+   962→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Реферальная программа</p>
+   963→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> История раскладов</p>
+   964→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🌐 Двуязычность (RU/EN)</p>
+   965→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 📨 Недельный дайджест</p>
+   966→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🔥 Серии и удержание</p>
+   967→              </CardContent>
+   968→            </Card>
+   969→          </section>
+   970→        </main>
+   971→
+   972→        <footer className="mt-auto border-t border-amber-900/30 bg-stone-950">
+   973→          <div className="container mx-auto px-4 py-6 text-center text-sm text-stone-500">
+   974→            <p>🔮 София — мудрая ведунья. Telegram-бот на Clean Architecture.</p>
+   975→            <p className="mt-1 text-xs">Документация: <code className="text-stone-400">docs/</code> · Worklog: <code className="text-stone-400">worklog.md</code></p>
+   976→          </div>
+   977→        </footer>
+   978→      </div>
+   979→    </TooltipProvider>
+   980→  );
+   981→}
+   982→
+   983→function StatCard({ icon: Icon, label, value, loading, accent, sub, spark, sparkColor }: {
+   984→  icon: React.ComponentType<{ className?: string }>; label: string; value?: number; loading?: boolean;
+   985→  accent: string; sub?: string; spark?: number[]; sparkColor?: string;
+   986→}) {
+   987→  return (
+   988→    <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm hover:border-stone-700 transition-colors group">
+   989→      <CardContent className="p-4">
+   990→        <div className="flex items-start justify-between mb-2">
+   991→          <span className="text-xs text-stone-400">{label}</span>
+   992→          <Icon className={`w-4 h-4 ${accent} group-hover:scale-110 transition-transform`} />
+   993→        </div>
+   994→        <div className={`text-2xl font-bold font-mono ${accent} flex items-baseline gap-2`}>
+   995→          {loading ? <Skeleton className="h-7 w-16" /> : (value ?? 0).toLocaleString('ru-RU')}
+   996→          {spark && spark.length > 0 && !loading && (
+   997→            <Sparkline data={spark} width={70} height={20} color={sparkColor ?? '#f59e0b'} />
+   998→          )}
+   999→        </div>
+  1000→        {sub && <div className="text-xs text-stone-500 mt-1">{sub}</div>}
+  1001→      </CardContent>
+  1002→    </Card>
+  1003→  );
+  1004→}
+  1005→
+  1006→function FunnelBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
+  1007→  const pct = max > 0 ? (value / max) * 100 : 0;
+  1008→  return (
+  1009→    <div>
+  1010→      <div className="flex justify-between text-xs mb-1">
+  1011→        <span className="text-stone-400">{label}</span>
+  1012→        <span className="font-mono text-stone-300">{value.toLocaleString('ru-RU')}</span>
+  1013→      </div>
+  1014→      <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+  1015→        <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+  1016→      </div>
+  1017→    </div>
+  1018→  );
+  1019→}
+  1020→
+  1021→function DigestStat({ icon: Icon, label, value, color }: {
+  1022→  icon: React.ComponentType<{ className?: string }>; label: string; value: number; color: string;
+  1023→}) {
+  1024→  return (
+  1025→    <div className="rounded-lg bg-stone-950/40 border border-stone-800 p-3 text-center">
+  1026→      <Icon className={`w-4 h-4 mx-auto ${color} mb-1`} />
+  1027→      <div className={`text-xl font-bold font-mono ${color}`}>{value.toLocaleString('ru-RU')}</div>
+  1028→      <div className="text-xs text-stone-500">{label}</div>
+  1029→    </div>
+  1030→  );
+  1031→}
+  1032→
+  1033→function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
+  1034→  const maxMsgs = Math.max(...buckets.map((b) => b.messages), 1);
+  1035→  const maxReadings = Math.max(...buckets.map((b) => b.readings), 1);
+  1036→  return (
+  1037→    <div className="space-y-4">
+  1038→      <div>
+  1039→        <div className="flex items-center justify-between text-xs mb-2">
+  1040→          <span className="text-stone-400 flex items-center gap-1.5">
+  1041→            <span className="w-2 h-2 rounded-full bg-amber-500" /> Сообщения
+  1042→          </span>
+  1043→          <span className="text-stone-500">max: {maxMsgs}</span>
+  1044→        </div>
+  1045→        <div className="flex items-end gap-1 h-32">
+  1046→          {buckets.map((b) => {
+  1047→            const h = (b.messages / maxMsgs) * 100;
+  1048→            return (
+  1049→              <Tooltip key={b.date}>
+  1050→                <TooltipTrigger asChild>
+  1051→                  <div className="flex-1 group cursor-pointer">
+  1052→                    <div
+  1053→                      className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/80 group-hover:from-amber-800/60 group-hover:to-amber-400/100 transition-all"
+  1054→                      style={{ height: `${Math.max(2, h)}%` }}
+  1055→                    />
+  1056→                  </div>
+  1057→                </TooltipTrigger>
+  1058→                <TooltipContent>
+  1059→                  <div className="text-xs">
+  1060→                    <div className="font-mono">{shortDate(b.date)}</div>
+  1061→                    <div className="text-amber-300">{b.messages} сообщ.</div>
+  1062→                    <div className="text-stone-400">раскладов: {b.readings}</div>
+  1063→                    <div className="text-emerald-400">новых: {b.newUsers}</div>
+  1064→                    <div className="text-amber-500">💎 {b.crystalsSpent}</div>
+  1065→                  </div>
+  1066→                </TooltipContent>
+  1067→              </Tooltip>
+  1068→            );
+  1069→          })}
+  1070→        </div>
+  1071→      </div>
+  1072→      <div>
+  1073→        <div className="flex items-center justify-between text-xs mb-2">
+  1074→          <span className="text-stone-400 flex items-center gap-1.5">
+  1075→            <span className="w-2 h-2 rounded-full bg-purple-500" /> Расклады
+  1076→          </span>
+  1077→          <span className="text-stone-500">max: {maxReadings}</span>
+  1078→        </div>
+  1079→        <div className="flex items-end gap-1 h-16">
+  1080→          {buckets.map((b) => {
+  1081→            const h = (b.readings / maxReadings) * 100;
+  1082→            return (
+  1083→              <div key={b.date} className="flex-1">
+  1084→                <div
+  1085→                  className="w-full rounded-t bg-gradient-to-t from-purple-900/40 to-purple-500/80 transition-all"
+  1086→                  style={{ height: `${Math.max(2, h)}%` }}
+  1087→                />
+  1088→              </div>
+  1089→            );
+  1090→          })}
+  1091→        </div>
+  1092→      </div>
+  1093→      <div className="flex justify-between text-xs text-stone-500">
+  1094→        <span>{shortDate(buckets[0]?.date ?? new Date().toISOString())}</span>
+  1095→        <span>{shortDate(buckets[buckets.length - 1]?.date ?? new Date().toISOString())}</span>
+  1096→      </div>
+  1097→    </div>
+  1098→  );
+  1099→}
+  1100→

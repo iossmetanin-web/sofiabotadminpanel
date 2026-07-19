@@ -67,6 +67,7 @@ export function formatReadingHistoryItem(r: ReadingDTO, index: number, loc: Loca
     horoscope: { ru: "♈ Гороскоп", en: "♈ Horoscope" },
     single_card: { ru: "🃏 Одна карта", en: "🃏 Single card" },
     card_of_day: { ru: "🌙 Карта дня", en: "🌙 Card of the day" },
+    yes_no: { ru: "✨ Да / Нет", en: "✨ Yes / No" },
   };
   const date = new Date(r.createdAt).toLocaleDateString(loc === "en" ? "en-US" : "ru-RU");
   const label = typeLabel[r.type]?.[loc] ?? r.type;
@@ -149,6 +150,7 @@ export function detectReadingType(text: string): string | null {
   if (has(["гороскоп", "зодиак", "horoscope", "zodiac"])) return "horoscope";
   if (has(["бесплатная карта", "бесплатную карту", "одна карта", "free card", "one card", "single card"])) return "single_card";
   if (has(["карта дня", "карту дня", "card of the day", "card of day", "daily card"])) return "card_of_day";
+  if (has(["да нет", "да или нет", "да/нет", "yes no", "yes or no", "yes/no"])) return "yes_no";
   if (has(["расклад", "погадай", "таро", "reading", "tarot", "read"])) return "tarot_small"; // default to small
   return null;
 }

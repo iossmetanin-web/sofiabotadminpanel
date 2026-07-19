@@ -166,6 +166,16 @@ type Dict = {
   err_text_only: string;
   err_text_only_onboarding: string;
 
+  // Dream
+  dream_cmd_desc: string;
+  dream_prompt: string;
+  dream_ask: string;
+
+  // Yes/No tarot
+  yes_no: string;
+  yes_no_ask: string;
+  yes_no_cost: string;
+
   // Schedulers
   digest_weekly_title: string;
   digest_admin_summary: string;
@@ -313,6 +323,14 @@ const ru: Dict = {
   err_text_only: "Я слышу тебя, но вижу только слова. Расскажи мне текстом, что у тебя на душе. 🌙",
   err_text_only_onboarding: "Я слушаю слова. Напиши мне текстом. 🌙",
 
+  dream_cmd_desc: "💭 Толкование сна",
+  dream_prompt: "💭 Расскажи мне свой сон — я всмотрюсь в образы.",
+  dream_ask: "💭 Что тебе приснилось? Расскажи — я всмотрюсь в образы.",
+
+  yes_no: "✨ Да / Нет",
+  yes_no_ask: "✨ Задай вопрос, на который можно ответить «да» или «нет»:",
+  yes_no_cost: "✨ Да / Нет · 1💎",
+
   digest_weekly_title: "🌙 <b>Недельный дайджест Софии</b>",
   digest_admin_summary: "📊 <b>Сводка за неделю</b>\n\nНовых пользователей: {newUsers}\nАктивных за неделю: {active7d}\nСообщений: {messages}\nРаскладов: {readings}\n💎 Потрачено: {crystals}\n\nТоп-3 активных:\n{top3}",
   birthday_greeting: "🌙 Сегодня особенный день — твой день рождения. Я зажгла бы для тебя свечу. Пусть этот год будет добрым к тебе, {name}. 🌟",
@@ -458,6 +476,14 @@ const en: Dict = {
   err_unknown_callback: "I don't know this button. Try /menu.",
   err_text_only: "I hear you, but I can only see words. Tell me in text what is on your heart. 🌙",
   err_text_only_onboarding: "I listen to words. Write to me in text. 🌙",
+
+  dream_cmd_desc: "💭 Dream interpretation",
+  dream_prompt: "💭 Tell me your dream — I will gaze into the images.",
+  dream_ask: "💭 What did you dream? Tell me — I will gaze into the images.",
+
+  yes_no: "✨ Yes / No",
+  yes_no_ask: "✨ Ask a question that can be answered with \"yes\" or \"no\":",
+  yes_no_cost: "✨ Yes / No · 1💎",
 
   digest_weekly_title: "🌙 <b>Sofia's weekly digest</b>",
   digest_admin_summary: "📊 <b>Weekly summary</b>\n\nNew users: {newUsers}\nActive this week: {active7d}\nMessages: {messages}\nReadings: {readings}\n💎 Crystals spent: {crystals}\n\nTop 3 active:\n{top3}",

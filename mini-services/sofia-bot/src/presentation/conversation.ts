@@ -6,7 +6,8 @@ import { deps } from "./deps.js";
 import { env, behavior, pricing } from "../config/env.js";
 import {
   SOFIA_SYSTEM_PROMPT, TAROT_READING_PROMPT, HOROSCOPE_PROMPT,
-  SINGLE_CARD_PROMPT, CARD_OF_DAY_PROMPT,
+  SINGLE_CARD_PROMPT, CARD_OF_DAY_PROMPT, DREAM_PROMPT_RU, DREAM_PROMPT_EN,
+  YES_NO_PROMPT_RU, YES_NO_PROMPT_EN,
 } from "../domain/prompts.js";
 import {
   SPREADS, getCardByNumber, getCardByNumberLocalized, type SpreadDefinition,
@@ -105,6 +106,18 @@ export async function handleMessage(ctx: Context): Promise<void> {
   // TARO_ASK_NUMBERS — parse numbers for the chosen spread.
   if (state === "TARO_ASK_NUMBERS") {
     await handleTaroAskNumbers(ctx, user, text);
+    return;
+  }
+
+  // DREAM — user is telling their dream.
+  if (state === "DREAM") {
+    await handleDreamMessage(ctx, user, text);
+    return;
+  }
+
+  // YES_NO_ASK — user is typing their yes/no question.
+  if (state === "YES_NO_ASK") {
+    await handleYesNoMessage(ctx, user, text);
     return;
   }
 
@@ -335,6 +348,7 @@ function costFor(type: string): number {
     tarot_career: pricing.tarot_career,
     tarot_decision: pricing.tarot_decision,
     horoscope: pricing.horoscope,
+    yes_no: 1,
   };
   return map[type] ?? 1;
 }
@@ -514,4 +528,102 @@ export async function showHistory(ctx: Context, user: any, page: number): Promis
   const text = t(loc, "history_page", { page: String(p), total: String(totalPages) }) + "\n\n" +
     items.map((r, i) => formatReadingHistoryItem(r, (p - 1) * limit + i + 1, loc)).join("\n\n");
   await ctx.reply(text, { ...HTML, reply_markup: historyPaginationKeyboard(p, totalPages, loc) });
+}
+
+// ---- Dream interpretation handler ----
+async function handleDreamMessage(ctx: Context, user: any, dreamText: string): Promise<void> {
+  const d = deps();
+  const loc: Locale = user.language;
+  const prompt = (loc === "en" ? DREAM_PROMPT_EN : DREAM_PROMPT_RU)
+    .replace("{name}", user.name ?? "друг")
+    .replace("{zodiac}", user.zodiacSign ?? "—")
+    .replace("{dream}", dreamText.slice(0, 1000));
+
+  await d.repos.users.setState(user.telegramId, "CONVERSATION");
+  await d.repos.conversations.save(user.id, "user", dreamText.slice(0, 2000));
+
+  try {
+    const messages = await d.services.context.buildMessages({
+      systemPrompt: SOFIA_SYSTEM_PROMPT,
+      userTelegramId: user.telegramId,
+      userName: user.name,
+      userZodiac: user.zodiacSign,
+      userAgeGroup: user.ageGroup,
+      currentUserMessage: prompt,
+    });
+    const res = await d.llm.generate(messages, { timeoutMs: 15000, maxTokens: 500 });
+    await d.repos.conversations.save(user.id, "sofia", res.content.slice(0, 4000));
+    for (const chunk of splitMessage(res.content)) {
+      await ctx.reply(chunk, HTML);
+    }
+    await ctx.reply("🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+  } catch (e) {
+    (ctx as any).log?.error?.({ err: e }, "dream interpretation failed");
+    await ctx.reply(loc === "en"
+      ? "The images are still forming. Try again later. 🌙"
+      : "Образы ещё формируются. Попробуй позже. 🌙",
+      { ...HTML, reply_markup: mainMenuKeyboard(user) });
+  }
+}
+
+// ---- Yes/No reading handler ----
+async function handleYesNoMessage(ctx: Context, user: any, question: string): Promise<void> {
+  const d = deps();
+  const loc: Locale = user.language;
+  const cost = 1;
+
+  if (user.crystals < cost) {
+    await d.repos.users.setState(user.telegramId, "CONVERSATION");
+    await ctx.reply(t(loc, "billing_low_balance", { count: cost }), { ...HTML, reply_markup: buyMenuKeyboard(loc) });
+    return;
+  }
+
+  // Charge before generate.
+  try {
+    await d.services.billing.spend(user.telegramId, cost, loc === "en" ? "Yes/No reading" : "Расклад Да/Нет");
+  } catch (e) {
+    if (e instanceof InsufficientCrystalsError) {
+      await d.repos.users.setState(user.telegramId, "CONVERSATION");
+      await ctx.reply(t(loc, "billing_low_balance", { count: cost }), { ...HTML, reply_markup: buyMenuKeyboard(loc) });
+      return;
+    }
+    throw e;
+  }
+
+  await d.repos.users.setState(user.telegramId, "CONVERSATION");
+  await ctx.reply(loc === "en" ? "✨ Drawing a card…" : "✨ Тасую колоду…");
+
+  try {
+    // Draw 1 random card.
+    const n = Math.floor(Math.random() * 78) + 1;
+    const card = getCardByNumberLocalized(n, loc);
+    const reversedNote = card.reversed ? (loc === "en" ? " (reversed)" : " (перевёрнута)") : "";
+    const prompt = (loc === "en" ? YES_NO_PROMPT_EN : YES_NO_PROMPT_RU)
+      .replace("{name}", user.name ?? "друг")
+      .replace("{zodiac}", user.zodiacSign ?? "—")
+      .replace("{question}", question.slice(0, 500))
+      .replace("{cards}", `${card.name}${reversedNote}`);
+
+    const messages = await d.services.context.buildMessages({
+      systemPrompt: SOFIA_SYSTEM_PROMPT,
+      userTelegramId: user.telegramId,
+      userName: user.name,
+      userZodiac: user.zodiacSign,
+      userAgeGroup: user.ageGroup,
+      currentUserMessage: prompt,
+    });
+    const res = await d.llm.generate(messages, { timeoutMs: 15000, maxTokens: 400 });
+    const cardsJson = JSON.stringify({ name: card.name, reversed: card.reversed, position: "Ответ" });
+    await d.repos.readings.save(user.id, "yes_no", question.slice(0, 500), cardsJson, res.content, cost);
+
+    await ctx.reply(`🎴 <b>${escapeHtml(card.name)}</b>${reversedNote}`, HTML);
+    for (const chunk of splitMessage(res.content)) {
+      await ctx.reply(chunk, HTML);
+    }
+    await ctx.reply("🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+  } catch (e) {
+    await d.services.billing.refund(user.telegramId, cost, loc === "en" ? "Yes/No failure" : "Сбой Да/Нет");
+    (ctx as any).log?.error?.({ err: e }, "yes/no reading failed");
+    throw e;
+  }
 }

@@ -15,7 +15,7 @@ import {
 import { formatProfile, formatBalance, formatReadingHistoryItem, escapeHtml } from "./formatters.js";
 import { editTo } from "./commands.js";
 import { startReadingFlow } from "./conversation.js";
-import { SOFIA_SYSTEM_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN } from "../domain/prompts.js";
+import { SOFIA_SYSTEM_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN, YES_NO_PROMPT_RU, YES_NO_PROMPT_EN } from "../domain/prompts.js";
 
 const HTML = { parse_mode: "HTML" as const };
 
@@ -111,6 +111,14 @@ async function handleNav(ctx: Context, user: any, action: string, payload: strin
       await sendAffirmationInline(ctx, user);
       return;
     }
+    case "dream": {
+      const d = deps();
+      const loc2: Locale = user.language;
+      await d.repos.users.setState(user.telegramId, "DREAM");
+      await editTo(ctx, t(loc2, "dream_ask"),
+        new InlineKeyboard().text(t(loc2, "menu_back"), "nav:back"));
+      return;
+    }
     case "miniapp": {
       // Mini App launch — currently a placeholder; when a Web App URL is configured in BotFather,
       // we can switch to a real web_app button. For now, an explanatory message.
@@ -172,6 +180,19 @@ async function handleReading(ctx: Context, user: any, action: string, payload: s
   }
   if (action === "pick") {
     await startReadingFlow(ctx, user, payload);
+    return;
+  }
+  if (action === "yesno") {
+    // Yes/No reading: set state to YES_NO_ASK and prompt for question
+    const d = deps();
+    const loc: Locale = user.language;
+    if (user.crystals < 1) {
+      await editTo(ctx, t(loc, "billing_low_balance", { count: 1 }), buyMenuKeyboard(loc));
+      return;
+    }
+    await d.repos.users.setState(user.telegramId, "YES_NO_ASK");
+    await editTo(ctx, t(loc, "yes_no_ask"),
+      new InlineKeyboard().text(t(loc, "menu_back"), "nav:back"));
     return;
   }
   if (action === "cardday" || action === "freecard") {

@@ -1,0 +1,602 @@
+   500→   500→                  </Card>
+   501→   501→                )}
+   502→   502→              </TabsContent>
+   503→   503→
+   504→   504→              {/* Users */}
+   505→   505→              <TabsContent value="users" className="space-y-4">
+   506→   506→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   507→   507→                  <CardHeader>
+   508→   508→                    <div className="flex items-center justify-between gap-3 flex-wrap">
+   509→   509→                      <div>
+   510→   510→                        <CardTitle className="text-stone-100 font-serif">Пользователи</CardTitle>
+   511→   511→                        <CardDescription className="text-stone-400">Всего: {usersTotal}</CardDescription>
+   512→   512→                      </div>
+   513→   513→                      <Input placeholder="Поиск по имени/username…" value={search} onChange={(e) => onSearch(e.target.value)}
+   514→   514→                        className="w-64 bg-stone-950 border-stone-700" />
+   515→   515→                    </div>
+   516→   516→                  </CardHeader>
+   517→   517→                  <CardContent>
+   518→   518→                    <div className="rounded-md border border-stone-800 max-h-[28rem] overflow-y-auto sofia-scroll">
+   519→   519→                      <Table>
+   520→   520→                        <TableHeader className="sticky top-0 bg-stone-900">
+   521→   521→                          <TableRow className="border-stone-800 hover:bg-stone-900">
+   522→   522→                            <TableHead className="text-stone-400">Имя</TableHead>
+   523→   523→                            <TableHead className="text-stone-400">Username</TableHead>
+   524→   524→                            <TableHead className="text-stone-400">Знак</TableHead>
+   525→   525→                            <TableHead className="text-stone-400 text-center">🌐</TableHead>
+   526→   526→                            <TableHead className="text-stone-400 text-right">💎</TableHead>
+   527→   527→                            <TableHead className="text-stone-400 text-right">Сообщ.</TableHead>
+   528→   528→                            <TableHead className="text-stone-400 text-right">🔥</TableHead>
+   529→   529→                            <TableHead className="text-stone-400">Статус</TableHead>
+   530→   530→                            <TableHead className="text-stone-400">Был в сети</TableHead>
+   531→   531→                          </TableRow>
+   532→   532→                        </TableHeader>
+   533→   533→                        <TableBody>
+   534→   534→                          {loading.users && Array.from({ length: 5 }).map((_, i) => (
+   535→   535→                            <TableRow key={i}><TableCell colSpan={9}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
+   536→   536→                          ))}
+   537→   537→                          {!loading.users && users.map((u) => (
+   538→   538→                            <TableRow key={u.id} className="border-stone-800 hover:bg-stone-900/60 transition-colors">
+   539→   539→                              <TableCell className="font-medium text-stone-100">
+   540→   540→                                <div className="flex items-center gap-2">
+   541→   541→                                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-stone-700 to-stone-900 flex items-center justify-center text-xs">
+   542→   542→                                    {(u.name ?? u.firstName ?? '?').slice(0, 1).toUpperCase()}
+   543→   543→                                  </div>
+   544→   544→                                  {u.name ?? u.firstName ?? '—'}
+   545→   545→                                </div>
+   546→   546→                              </TableCell>
+   547→   547→                              <TableCell className="text-stone-400">{u.username ? `@${u.username}` : '—'}</TableCell>
+   548→   548→                              <TableCell>{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : '—'}</TableCell>
+   549→   549→                              <TableCell className="text-center">
+   550→   550→                                <Tooltip>
+   551→   551→                                  <TooltipTrigger>
+   552→   552→                                    <Badge variant="outline" className="text-xs border-stone-700 text-stone-400">
+   553→   553→                                      {u.language === 'en' ? '🇬🇧' : '🇷🇺'}
+   554→   554→                                    </Badge>
+   555→   555→                                  </TooltipTrigger>
+   556→   556→                                  <TooltipContent>{u.language === 'en' ? 'English' : 'Русский'}</TooltipContent>
+   557→   557→                                </Tooltip>
+   558→   558→                              </TableCell>
+   559→   559→                              <TableCell className="text-right font-mono text-amber-300">{u.crystals}</TableCell>
+   560→   560→                              <TableCell className="text-right font-mono">{u.messageCount}</TableCell>
+   561→   561→                              <TableCell className="text-right font-mono">
+   562→   562→                                {u.streakDays > 0 ? (
+   563→   563→                                  <span className="inline-flex items-center gap-0.5 text-orange-400">
+   564→   564→                                    <Flame className="w-3 h-3" /> {u.streakDays}
+   565→   565→                                  </span>
+   566→   566→                                ) : '0'}
+   567→   567→                              </TableCell>
+   568→   568→                              <TableCell>
+   569→   569→                                {u.isBlocked ? <Badge variant="destructive" className="text-xs">блок</Badge>
+   570→   570→                                  : u.onboardingCompleted ? <Badge className="text-xs bg-emerald-900/60">активен</Badge>
+   571→   571→                                  : <Badge variant="outline" className="text-xs border-stone-600 text-stone-400">{u.onboardingStep}</Badge>}
+   572→   572→                                {u.isAdmin && <Badge className="text-xs ml-1 bg-amber-900/60">админ</Badge>}
+   573→   573→                              </TableCell>
+   574→   574→                              <TableCell className="text-stone-400 text-xs">{timeAgo(u.lastSeenAt)}</TableCell>
+   575→   575→                            </TableRow>
+   576→   576→                          ))}
+   577→   577→                          {!loading.users && users.length === 0 && (
+   578→   578→                            <TableRow><TableCell colSpan={9} className="text-center text-stone-500 py-8">Пользователей пока нет</TableCell></TableRow>
+   579→   579→                          )}
+   580→   580→                        </TableBody>
+   581→   581→                      </Table>
+   582→   582→                    </div>
+   583→   583→                    {usersTotalPages > 1 && (
+   584→   584→                      <div className="flex items-center justify-between mt-3">
+   585→   585→                        <Button variant="outline" size="sm" disabled={usersPage <= 1} onClick={() => fetchUsers(usersPage - 1, search)} className="border-stone-700 text-stone-300">← Назад</Button>
+   586→   586→                        <span className="text-sm text-stone-400">{usersPage} / {usersTotalPages}</span>
+   587→   587→                        <Button variant="outline" size="sm" disabled={usersPage >= usersTotalPages} onClick={() => fetchUsers(usersPage + 1, search)} className="border-stone-700 text-stone-300">Вперёд →</Button>
+   588→   588→                      </div>
+   589→   589→                    )}
+   590→   590→                  </CardContent>
+   591→   591→                </Card>
+   592→   592→              </TabsContent>
+   593→   593→
+   594→   594→              {/* Readings */}
+   595→   595→              <TabsContent value="readings" className="space-y-4">
+   596→   596→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   597→   597→                  <CardHeader>
+   598→   598→                    <CardTitle className="text-stone-100 font-serif">Последние расклады</CardTitle>
+   599→   599→                    <CardDescription className="text-stone-400">{readings.length} недавних</CardDescription>
+   600→   600→                  </CardHeader>
+   601→   601→                  <CardContent>
+   602→   602→                    <div className="space-y-3 max-h-[36rem] overflow-y-auto sofia-scroll pr-1">
+   603→   603→                      {loading.readings && Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+   604→   604→                      {!loading.readings && readings.length === 0 && (
+   605→   605→                        <p className="text-center text-stone-500 py-8">Раскладов пока нет. Откройте бота и сделайте первый расклад!</p>
+   606→   606→                      )}
+   607→   607→                      {readings.map((r) => {
+   608→   608→                        const color = READING_COLORS[r.type] ?? '#f59e0b';
+   609→   609→                        return (
+   610→   610→                          <div key={r.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-colors">
+   611→   611→                            <div className="flex items-center justify-between mb-1.5 gap-2">
+   612→   612→                              <div className="flex items-center gap-2 min-w-0">
+   613→   613→                                <div className="w-1 h-5 rounded-full" style={{ background: color }} />
+   614→   614→                                <Badge variant="outline" className="border-stone-700 text-stone-300 text-xs">
+   615→   615→                                  {READING_LABELS[r.type] ?? r.type}
+   616→   616→                                </Badge>
+   617→   617→                                {r.cost > 0 && <Badge className="bg-amber-950/60 text-amber-300 text-xs">{r.cost} 💎</Badge>}
+   618→   618→                              </div>
+   619→   619→                              <span className="text-xs text-stone-500 whitespace-nowrap">{timeAgo(r.createdAt)}</span>
+   620→   620→                            </div>
+   621→   621→                            <div className="text-xs text-stone-400 mb-1.5 flex items-center gap-1">
+   622→   622→                              <Eye className="w-3 h-3" />
+   623→   623→                              {r.user.name ?? r.user.firstName ?? '—'}
+   624→   624→                              {r.user.zodiacSign ? ` · ${ZODIAC_EMOJI[r.user.zodiacSign] ?? ''} ${r.user.zodiacSign}` : ''}
+   625→   625→                            </div>
+   626→   626→                            <p className="text-sm text-stone-300 line-clamp-3 leading-relaxed">{r.interpretation}</p>
+   627→   627→                          </div>
+   628→   628→                        );
+   629→   629→                      })}
+   630→   630→                    </div>
+   631→   631→                  </CardContent>
+   632→   632→                </Card>
+   633→   633→              </TabsContent>
+   634→   634→
+   635→   635→              {/* Streaks */}
+   636→   636→              <TabsContent value="streaks" className="space-y-4">
+   637→   637→                {!streaks ? (
+   638→   638→                  <Card className="bg-stone-900/60 border-stone-800">
+   639→   639→                    <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
+   640→   640→                  </Card>
+   641→   641→                ) : (
+   642→   642→                  <>
+   643→   643→                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+   644→   644→                      <StatCard icon={Flame} label="Карта дня (7д)" value={streaks.cardOfDayActiveUsers} accent="text-orange-400" sub="активных" />
+   645→   645→                      <StatCard icon={Crown} label="Макс. серия" value={streaks.topStreaks[0]?.streakDays ?? 0} accent="text-amber-400" sub="дней подряд" />
+   646→   646→                      <StatCard icon={Users} label="С серией >0" value={streaks.distribution.filter((d) => d.bucket !== '0').reduce((a, b) => a + b.count, 0)} accent="text-emerald-400" sub="пользователей" />
+   647→   647→                      <StatCard icon={Calendar} label="DAU сегодня" value={streaks.dailyActive[streaks.dailyActive.length - 1]?.count ?? 0} accent="text-sky-300" sub="по lastActivityDay" />
+   648→   648→                    </div>
+   649→   649→
+   650→   650→                    <div className="grid lg:grid-cols-2 gap-4">
+   651→   651→                      <Card className="bg-stone-900/60 border-stone-800">
+   652→   652→                        <CardHeader>
+   653→   653→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   654→   654→                            <Crown className="w-4 h-4 text-amber-400" /> Топ серий
+   655→   655→                          </CardTitle>
+   656→   656→                          <CardDescription className="text-stone-400">Самые преданные пользователи</CardDescription>
+   657→   657→                        </CardHeader>
+   658→   658→                        <CardContent className="space-y-2 max-h-72 overflow-y-auto sofia-scroll pr-1">
+   659→   659→                          {streaks.topStreaks.length === 0 && (
+   660→   660→                            <p className="text-center text-stone-500 py-8">Пока никто не набрал серию</p>
+   661→   661→                          )}
+   662→   662→                          {streaks.topStreaks.map((u, i) => (
+   663→   663→                            <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
+   664→   664→                              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${i === 0 ? 'bg-amber-600/30 text-amber-300' : i === 1 ? 'bg-stone-500/30 text-stone-200' : i === 2 ? 'bg-amber-900/30 text-amber-400' : 'bg-stone-800/50 text-stone-400'}`}>
+   665→   665→                                {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}
+   666→   666→                              </div>
+   667→   667→                              <div className="flex-1 min-w-0">
+   668→   668→                                <div className="text-sm font-medium truncate">{u.name}</div>
+   669→   669→                                <div className="text-xs text-stone-500">
+   670→   670→                                  {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+   671→   671→                                </div>
+   672→   672→                              </div>
+   673→   673→                              <div className="text-right">
+   674→   674→                                <div className="font-mono text-orange-400 text-lg flex items-center gap-1">
+   675→   675→                                  <Flame className="w-4 h-4" />{u.streakDays}
+   676→   676→                                </div>
+   677→   677→                                <div className="text-xs text-stone-500">{timeAgo(u.lastSeenAt)}</div>
+   678→   678→                              </div>
+   679→   679→                            </div>
+   680→   680→                          ))}
+   681→   681→                        </CardContent>
+   682→   682→                      </Card>
+   683→   683→
+   684→   684→                      <Card className="bg-stone-900/60 border-stone-800">
+   685→   685→                        <CardHeader>
+   686→   686→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   687→   687→                            <Flame className="w-4 h-4 text-orange-400" /> Распределение серий
+   688→   688→                          </CardTitle>
+   689→   689→                          <CardDescription className="text-stone-400">Сколько пользователей в каждой категории</CardDescription>
+   690→   690→                        </CardHeader>
+   691→   691→                        <CardContent className="space-y-3">
+   692→   692→                          {streaks.distribution.map((d) => {
+   693→   693→                            const max = Math.max(...streaks.distribution.map((x) => x.count), 1);
+   694→   694→                            const pct = (d.count / max) * 100;
+   695→   695→                            const barColor = d.bucket === '0' ? 'bg-stone-600' : d.bucket === '1-3' ? 'bg-amber-700' : d.bucket === '4-7' ? 'bg-amber-600' : d.bucket === '8-14' ? 'bg-orange-600' : d.bucket === '15-30' ? 'bg-orange-500' : 'bg-red-500';
+   696→   696→                            return (
+   697→   697→                              <div key={d.bucket} className="space-y-1">
+   698→   698→                                <div className="flex items-center justify-between text-xs">
+   699→   699→                                  <span className="text-stone-400">{d.bucket === '0' ? 'Без серии' : `${d.bucket} дн.`}</span>
+   700→   700→                                  <span className="font-mono text-stone-300">{d.count}</span>
+   701→   701→                                </div>
+   702→   702→                                <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+   703→   703→                                  <div className={`h-full ${barColor} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+   704→   704→                                </div>
+   705→   705→                              </div>
+   706→   706→                            );
+   707→   707→                          })}
+   708→   708→                        </CardContent>
+   709→   709→                      </Card>
+   710→   710→                    </div>
+   711→   711→
+   712→   712→                    <Card className="bg-stone-900/60 border-stone-800">
+   713→   713→                      <CardHeader>
+   714→   714→                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   715→   715→                          <Calendar className="w-4 h-4 text-sky-400" /> DAU за 14 дней
+   716→   716→                        </CardTitle>
+   717→   717→                        <CardDescription className="text-stone-400">Daily Active Users по lastActivityDay</CardDescription>
+   718→   718→                      </CardHeader>
+   719→   719→                      <CardContent>
+   720→   720→                        <div className="flex items-end gap-1 h-32">
+   721→   721→                          {streaks.dailyActive.map((d) => {
+   722→   722→                            const max = Math.max(...streaks.dailyActive.map((x) => x.count), 1);
+   723→   723→                            const h = (d.count / max) * 100;
+   724→   724→                            return (
+   725→   725→                              <Tooltip key={d.date}>
+   726→   726→                                <TooltipTrigger asChild>
+   727→   727→                                  <div className="flex-1 group cursor-pointer">
+   728→   728→                                    <div
+   729→   729→                                      className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/70 group-hover:from-amber-800/60 group-hover:to-amber-400/90 transition-all"
+   730→   730→                                      style={{ height: `${Math.max(2, h)}%` }}
+   731→   731→                                    />
+   732→   732→                                  </div>
+   733→   733→                                </TooltipTrigger>
+   734→   734→                                <TooltipContent>
+   735→   735→                                  <div className="text-xs">
+   736→   736→                                    <div className="font-mono">{shortDate(d.date)}</div>
+   737→   737→                                    <div className="text-amber-300">{d.count} активных</div>
+   738→   738→                                  </div>
+   739→   739→                                </TooltipContent>
+   740→   740→                              </Tooltip>
+   741→   741→                            );
+   742→   742→                          })}
+   743→   743→                        </div>
+   744→   744→                        <div className="flex justify-between mt-2 text-xs text-stone-500">
+   745→   745→                          <span>{shortDate(streaks.dailyActive[0]?.date ?? new Date().toISOString())}</span>
+   746→   746→                          <span>{shortDate(streaks.dailyActive[streaks.dailyActive.length - 1]?.date ?? new Date().toISOString())}</span>
+   747→   747→                        </div>
+   748→   748→                      </CardContent>
+   749→   749→                    </Card>
+   750→   750→                  </>
+   751→   751→                )}
+   752→   752→              </TabsContent>
+   753→   753→
+   754→   754→              {/* Digest */}
+   755→   755→              <TabsContent value="digest" className="space-y-4">
+   756→   756→                {!digest ? (
+   757→   757→                  <Card className="bg-stone-900/60 border-stone-800">
+   758→   758→                    <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
+   759→   759→                  </Card>
+   760→   760→                ) : (
+   761→   761→                  <>
+   762→   762→                    <Card className="bg-gradient-to-br from-stone-900 via-stone-900 to-amber-950/30 border-amber-900/40 backdrop-blur-sm">
+   763→   763→                      <CardHeader>
+   764→   764→                        <div className="flex items-center justify-between gap-3 flex-wrap">
+   765→   765→                          <div>
+   766→   766→                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2 text-xl">
+   767→   767→                              <Mail className="w-5 h-5 text-amber-400" /> Недельный дайджест
+   768→   768→                            </CardTitle>
+   769→   769→                            <CardDescription className="text-stone-400">
+   770→   770→                              {new Date(digest.weekRange.from).toLocaleDateString('ru-RU')} — {new Date(digest.weekRange.to).toLocaleDateString('ru-RU')}
+   771→   771→                            </CardDescription>
+   772→   772→                          </div>
+   773→   773→                          {digest.lastSentAt ? (
+   774→   774→                            <Badge variant="outline" className="border-emerald-700/50 text-emerald-300 bg-emerald-950/30">
+   775→   775→                              <Clock className="w-3 h-3 mr-1" /> Отправлен: {timeAgo(digest.lastSentAt)}
+   776→   776→                            </Badge>
+   777→   777→                          ) : (
+   778→   778→                            <Badge variant="outline" className="border-amber-700/50 text-amber-300 bg-amber-950/30">
+   779→   779→                              <Clock className="w-3 h-3 mr-1" /> Ещё не отправлялся на этой неделе
+   780→   780→                            </Badge>
+   781→   781→                          )}
+   782→   782→                        </div>
+   783→   783→                      </CardHeader>
+   784→   784→                      <CardContent>
+   785→   785→                        <p className="text-sm text-stone-300 leading-relaxed mb-4 italic font-serif">
+   786→   786→                          🌙 Каждый воскресенье София автоматически собирает недельную сводку и отправляет её всем админам.
+   787→   787→                          Ниже — превью того, что попадёт в следующий дайджест.
+   788→   788→                        </p>
+   789→   789→                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+   790→   790→                          <DigestStat icon={Users} label="Новых" value={digest.stats.newUsers} color="text-amber-400" />
+   791→   791→                          <DigestStat icon={Activity} label="Активны 7д" value={digest.stats.active7d} color="text-emerald-400" />
+   792→   792→                          <DigestStat icon={MessageCircle} label="Сообщений" value={digest.stats.messages} color="text-sky-300" />
+   793→   793→                          <DigestStat icon={Sparkles} label="Раскладов" value={digest.stats.readings} color="text-amber-300" />
+   794→   794→                          <DigestStat icon={Gem} label="💎 Потрачено" value={digest.stats.crystalsSpent} color="text-amber-500" />
+   795→   795→                        </div>
+   796→   796→                      </CardContent>
+   797→   797→                    </Card>
+   798→   798→
+   799→   799→                    <div className="grid lg:grid-cols-2 gap-4">
+   800→   800→                      <Card className="bg-stone-900/60 border-stone-800">
+   801→   801→                        <CardHeader>
+   802→   802→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   803→   803→                            <Crown className="w-4 h-4 text-amber-400" /> Топ-5 за неделю
+   804→   804→                          </CardTitle>
+   805→   805→                        </CardHeader>
+   806→   806→                        <CardContent className="space-y-2">
+   807→   807→                          {digest.topUsers.length === 0 && <p className="text-center text-stone-500 py-6">Нет активных пользователей</p>}
+   808→   808→                          {digest.topUsers.map((u, i) => (
+   809→   809→                            <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
+   810→   810→                              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-700/40 to-stone-800 flex items-center justify-center text-xs font-bold text-amber-300">
+   811→   811→                                {i + 1}
+   812→   812→                              </div>
+   813→   813→                              <div className="flex-1 min-w-0">
+   814→   814→                                <div className="text-sm font-medium truncate">{u.name}</div>
+   815→   815→                                <div className="text-xs text-stone-500">
+   816→   816→                                  {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+   817→   817→                                </div>
+   818→   818→                              </div>
+   819→   819→                              <div className="text-right text-xs">
+   820→   820→                                <div className="font-mono text-stone-200">{u.messageCount} сообщ.</div>
+   821→   821→                                {u.streakDays > 0 && <div className="text-orange-400">🔥 {u.streakDays}</div>}
+   822→   822→                              </div>
+   823→   823→                            </div>
+   824→   824→                          ))}
+   825→   825→                        </CardContent>
+   826→   826→                      </Card>
+   827→   827→
+   828→   828→                      <Card className="bg-stone-900/60 border-stone-800">
+   829→   829→                        <CardHeader>
+   830→   830→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   831→   831→                            <Sparkles className="w-4 h-4 text-amber-400" /> Расклады за неделю
+   832→   832→                          </CardTitle>
+   833→   833→                        </CardHeader>
+   834→   834→                        <CardContent className="space-y-2">
+   835→   835→                          {digest.readingsByType.length === 0 && <p className="text-center text-stone-500 py-6">Не было раскладов</p>}
+   836→   836→                          {digest.readingsByType.map((r) => {
+   837→   837→                            const max = digest.readingsByType[0]?.count ?? 1;
+   838→   838→                            const color = READING_COLORS[r.type] ?? '#f59e0b';
+   839→   839→                            return (
+   840→   840→                              <div key={r.type} className="space-y-1">
+   841→   841→                                <div className="flex items-center justify-between text-xs">
+   842→   842→                                  <span className="text-stone-300">{READING_LABELS[r.type] ?? r.type}</span>
+   843→   843→                                  <span className="font-mono text-stone-300">{r.count}</span>
+   844→   844→                                </div>
+   845→   845→                                <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
+   846→   846→                                  <div className="h-full rounded-full" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
+   847→   847→                                </div>
+   848→   848→                              </div>
+   849→   849→                            );
+   850→   850→                          })}
+   851→   851→                        </CardContent>
+   852→   852→                      </Card>
+   853→   853→                    </div>
+   854→   854→
+   855→   855→                    {digest.recentBroadcasts.length > 0 && (
+   856→   856→                      <Card className="bg-stone-900/60 border-stone-800">
+   857→   857→                        <CardHeader>
+   858→   858→                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
+   859→   859→                            <Send className="w-4 h-4 text-amber-400" /> Рассылки на этой неделе
+   860→   860→                          </CardTitle>
+   861→   861→                        </CardHeader>
+   862→   862→                        <CardContent className="space-y-2">
+   863→   863→                          {digest.recentBroadcasts.map((b) => (
+   864→   864→                            <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+   865→   865→                              <div className="flex items-center justify-between mb-1">
+   866→   866→                                <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
+   867→   867→                                  {b.status === 'done' ? '✓ отправлено' : b.status}
+   868→   868→                                </Badge>
+   869→   869→                                <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
+   870→   870→                              </div>
+   871→   871→                              <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
+   872→   872→                              <p className="text-xs text-stone-500">Отправлено: {b.sentCount} / {b.total} · ошибок: {b.failedCount}</p>
+   873→   873→                            </div>
+   874→   874→                          ))}
+   875→   875→                        </CardContent>
+   876→   876→                      </Card>
+   877→   877→                    )}
+   878→   878→                  </>
+   879→   879→                )}
+   880→   880→              </TabsContent>
+   881→   881→
+   882→   882→              {/* Broadcasts */}
+   883→   883→              <TabsContent value="broadcasts" className="space-y-4">
+   884→   884→                <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm">
+   885→   885→                  <CardHeader>
+   886→   886→                    <CardTitle className="text-stone-100 font-serif">Новая рассылка</CardTitle>
+   887→   887→                    <CardDescription className="text-stone-400">Отправить сообщение всем пользователям</CardDescription>
+   888→   888→                  </CardHeader>
+   889→   889→                  <CardContent className="space-y-3">
+   890→   890→                    <Textarea placeholder="Текст рассылки…" value={broadcastText} onChange={(e) => setBroadcastText(e.target.value)}
+   891→   891→                      rows={4} className="bg-stone-950 border-stone-700 resize-none" />
+   892→   892→                    <div className="flex items-center justify-between gap-3 flex-wrap">
+   893→   893→                      <p className="text-xs text-stone-500">
+   894→   894→                        💡 Поддерживается HTML-форматирование. Рассылка отправится асинхронно — бот берёт её из БД каждые 8 секунд.
+   895→   895→                      </p>
+   896→   896→                      <Button onClick={sendBroadcast} disabled={sending} className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-md shadow-amber-900/30">
+   897→   897→                        <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} /> {sending ? 'Отправка…' : 'Отправить'}
+   898→   898→                      </Button>
+   899→   899→                    </div>
+   900→   900→                  </CardContent>
+   901→   901→                </Card>
+   902→   902→
+   903→   903→                <Card className="bg-stone-900/60 border-stone-800">
+   904→   904→                  <CardHeader>
+   905→   905→                    <CardTitle className="text-stone-100 font-serif">История рассылок</CardTitle>
+   906→   906→                  </CardHeader>
+   907→   907→                  <CardContent>
+   908→   908→                    <div className="space-y-2 max-h-64 overflow-y-auto sofia-scroll pr-1">
+   909→   909→                      {loading.broadcasts && <Skeleton className="h-16 w-full" />}
+   910→   910→                      {!loading.broadcasts && broadcasts.length === 0 && (
+   911→   911→                        <p className="text-center text-stone-500 py-4">Рассылок пока не было</p>
+   912→   912→                      )}
+   913→   913→                      {broadcasts.map((b) => (
+   914→   914→                        <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-colors">
+   915→   915→                          <div className="flex items-center justify-between mb-1">
+   916→   916→                            <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
+   917→   917→                              {b.status === 'done' ? '✓ отправлено' : b.status}
+   918→   918→                            </Badge>
+   919→   919→                            <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
+   920→   920→                          </div>
+   921→   921→                          <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
+   922→   922→                          <div className="flex items-center gap-3 text-xs text-stone-500">
+   923→   923→                            <span>Отправлено: {b.sentCount} / {b.total}</span>
+   924→   924→                            {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+   925→   925→                          </div>
+   926→   926→                        </div>
+   927→   927→                      ))}
+   928→   928→                    </div>
+   929→   929→                  </CardContent>
+   930→   930→                </Card>
+   931→   931→              </TabsContent>
+   932→   932→            </Tabs>
+   933→   933→          </section>
+   934→   934→
+   935→   935→          {/* Architecture summary */}
+   936→   936→          <section className="grid md:grid-cols-3 gap-4">
+   937→   937→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   938→   938→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Bot className="w-4 h-4 text-amber-500" /> Архитектура</CardTitle></CardHeader>
+   939→   939→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   940→   940→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Clean Architecture (4 слоя)</p>
+   941→   941→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> grammY + TypeScript + Prisma</p>
+   942→   942→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> z-ai-web-dev-sdk для ИИ</p>
+   943→   943→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> FSM с сохранением в БД</p>
+   944→   944→                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Mini-service на порту 3003</p>
+   945→   945→              </CardContent>
+   946→   946→            </Card>
+   947→   947→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   948→   948→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Heart className="w-4 h-4 text-rose-400" /> Личность</CardTitle></CardHeader>
+   949→   949→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   950→   950→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Хранительница — тепло, безопасность</p>
+   951→   951→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Наблюдатель — мягкая психология</p>
+   952→   952→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Проводник — карты как зеркало</p>
+   953→   953→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Нравственный кодекс</p>
+   954→   954→                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Эмоциональная память</p>
+   955→   955→              </CardContent>
+   956→   956→            </Card>
+   957→   957→            <Card className="bg-stone-900/40 border-stone-800 backdrop-blur-sm">
+   958→   958→              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Zap className="w-4 h-4 text-amber-400" /> Возможности</CardTitle></CardHeader>
+   959→   959→              <CardContent className="text-sm text-stone-400 space-y-1.5">
+   960→   960→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 6 типов раскладов Таро</p>
+   961→   961→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Карта дня + аффирмации</p>
+   962→   962→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Реферальная программа</p>
+   963→   963→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> История раскладов</p>
+   964→   964→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🌐 Двуязычность (RU/EN)</p>
+   965→   965→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 📨 Недельный дайджест</p>
+   966→   966→                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🔥 Серии и удержание</p>
+   967→   967→              </CardContent>
+   968→   968→            </Card>
+   969→   969→          </section>
+   970→   970→        </main>
+   971→   971→
+   972→   972→        <footer className="mt-auto border-t border-amber-900/30 bg-stone-950">
+   973→   973→          <div className="container mx-auto px-4 py-6 text-center text-sm text-stone-500">
+   974→   974→            <p>🔮 София — мудрая ведунья. Telegram-бот на Clean Architecture.</p>
+   975→   975→            <p className="mt-1 text-xs">Документация: <code className="text-stone-400">docs/</code> · Worklog: <code className="text-stone-400">worklog.md</code></p>
+   976→   976→          </div>
+   977→   977→        </footer>
+   978→   978→      </div>
+   979→   979→    </TooltipProvider>
+   980→   980→  );
+   981→   981→}
+   982→   982→
+   983→   983→function StatCard({ icon: Icon, label, value, loading, accent, sub, spark, sparkColor }: {
+   984→   984→  icon: React.ComponentType<{ className?: string }>; label: string; value?: number; loading?: boolean;
+   985→   985→  accent: string; sub?: string; spark?: number[]; sparkColor?: string;
+   986→   986→}) {
+   987→   987→  return (
+   988→   988→    <Card className="bg-stone-900/60 border-stone-800 backdrop-blur-sm hover:border-stone-700 transition-colors group">
+   989→   989→      <CardContent className="p-4">
+   990→   990→        <div className="flex items-start justify-between mb-2">
+   991→   991→          <span className="text-xs text-stone-400">{label}</span>
+   992→   992→          <Icon className={`w-4 h-4 ${accent} group-hover:scale-110 transition-transform`} />
+   993→   993→        </div>
+   994→   994→        <div className={`text-2xl font-bold font-mono ${accent} flex items-baseline gap-2`}>
+   995→   995→          {loading ? <Skeleton className="h-7 w-16" /> : (value ?? 0).toLocaleString('ru-RU')}
+   996→   996→          {spark && spark.length > 0 && !loading && (
+   997→   997→            <Sparkline data={spark} width={70} height={20} color={sparkColor ?? '#f59e0b'} />
+   998→   998→          )}
+   999→   999→        </div>
+  1000→  1000→        {sub && <div className="text-xs text-stone-500 mt-1">{sub}</div>}
+  1001→  1001→      </CardContent>
+  1002→  1002→    </Card>
+  1003→  1003→  );
+  1004→  1004→}
+  1005→  1005→
+  1006→  1006→function FunnelBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
+  1007→  1007→  const pct = max > 0 ? (value / max) * 100 : 0;
+  1008→  1008→  return (
+  1009→  1009→    <div>
+  1010→  1010→      <div className="flex justify-between text-xs mb-1">
+  1011→  1011→        <span className="text-stone-400">{label}</span>
+  1012→  1012→        <span className="font-mono text-stone-300">{value.toLocaleString('ru-RU')}</span>
+  1013→  1013→      </div>
+  1014→  1014→      <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+  1015→  1015→        <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+  1016→  1016→      </div>
+  1017→  1017→    </div>
+  1018→  1018→  );
+  1019→  1019→}
+  1020→  1020→
+  1021→  1021→function DigestStat({ icon: Icon, label, value, color }: {
+  1022→  1022→  icon: React.ComponentType<{ className?: string }>; label: string; value: number; color: string;
+  1023→  1023→}) {
+  1024→  1024→  return (
+  1025→  1025→    <div className="rounded-lg bg-stone-950/40 border border-stone-800 p-3 text-center">
+  1026→  1026→      <Icon className={`w-4 h-4 mx-auto ${color} mb-1`} />
+  1027→  1027→      <div className={`text-xl font-bold font-mono ${color}`}>{value.toLocaleString('ru-RU')}</div>
+  1028→  1028→      <div className="text-xs text-stone-500">{label}</div>
+  1029→  1029→    </div>
+  1030→  1030→  );
+  1031→  1031→}
+  1032→  1032→
+  1033→  1033→function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
+  1034→  1034→  const maxMsgs = Math.max(...buckets.map((b) => b.messages), 1);
+  1035→  1035→  const maxReadings = Math.max(...buckets.map((b) => b.readings), 1);
+  1036→  1036→  return (
+  1037→  1037→    <div className="space-y-4">
+  1038→  1038→      <div>
+  1039→  1039→        <div className="flex items-center justify-between text-xs mb-2">
+  1040→  1040→          <span className="text-stone-400 flex items-center gap-1.5">
+  1041→  1041→            <span className="w-2 h-2 rounded-full bg-amber-500" /> Сообщения
+  1042→  1042→          </span>
+  1043→  1043→          <span className="text-stone-500">max: {maxMsgs}</span>
+  1044→  1044→        </div>
+  1045→  1045→        <div className="flex items-end gap-1 h-32">
+  1046→  1046→          {buckets.map((b) => {
+  1047→  1047→            const h = (b.messages / maxMsgs) * 100;
+  1048→  1048→            return (
+  1049→  1049→              <Tooltip key={b.date}>
+  1050→  1050→                <TooltipTrigger asChild>
+  1051→  1051→                  <div className="flex-1 group cursor-pointer">
+  1052→  1052→                    <div
+  1053→  1053→                      className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/80 group-hover:from-amber-800/60 group-hover:to-amber-400/100 transition-all"
+  1054→  1054→                      style={{ height: `${Math.max(2, h)}%` }}
+  1055→  1055→                    />
+  1056→  1056→                  </div>
+  1057→  1057→                </TooltipTrigger>
+  1058→  1058→                <TooltipContent>
+  1059→  1059→                  <div className="text-xs">
+  1060→  1060→                    <div className="font-mono">{shortDate(b.date)}</div>
+  1061→  1061→                    <div className="text-amber-300">{b.messages} сообщ.</div>
+  1062→  1062→                    <div className="text-stone-400">раскладов: {b.readings}</div>
+  1063→  1063→                    <div className="text-emerald-400">новых: {b.newUsers}</div>
+  1064→  1064→                    <div className="text-amber-500">💎 {b.crystalsSpent}</div>
+  1065→  1065→                  </div>
+  1066→  1066→                </TooltipContent>
+  1067→  1067→              </Tooltip>
+  1068→  1068→            );
+  1069→  1069→          })}
+  1070→  1070→        </div>
+  1071→  1071→      </div>
+  1072→  1072→      <div>
+  1073→  1073→        <div className="flex items-center justify-between text-xs mb-2">
+  1074→  1074→          <span className="text-stone-400 flex items-center gap-1.5">
+  1075→  1075→            <span className="w-2 h-2 rounded-full bg-purple-500" /> Расклады
+  1076→  1076→          </span>
+  1077→  1077→          <span className="text-stone-500">max: {maxReadings}</span>
+  1078→  1078→        </div>
+  1079→  1079→        <div className="flex items-end gap-1 h-16">
+  1080→  1080→          {buckets.map((b) => {
+  1081→  1081→            const h = (b.readings / maxReadings) * 100;
+  1082→  1082→            return (
+  1083→  1083→              <div key={b.date} className="flex-1">
+  1084→  1084→                <div
+  1085→  1085→                  className="w-full rounded-t bg-gradient-to-t from-purple-900/40 to-purple-500/80 transition-all"
+  1086→  1086→                  style={{ height: `${Math.max(2, h)}%` }}
+  1087→  1087→                />
+  1088→  1088→              </div>
+  1089→  1089→            );
+  1090→  1090→          })}
+  1091→  1091→        </div>
+  1092→  1092→      </div>
+  1093→  1093→      <div className="flex justify-between text-xs text-stone-500">
+  1094→  1094→        <span>{shortDate(buckets[0]?.date ?? new Date().toISOString())}</span>
+  1095→  1095→        <span>{shortDate(buckets[buckets.length - 1]?.date ?? new Date().toISOString())}</span>
+  1096→  1096→      </div>
+  1097→  1097→    </div>
+  1098→  1098→  );
+  1099→  1099→}
+
+[showing lines 500-1099 of 1100; use offset=1100 with limit to continue reading]

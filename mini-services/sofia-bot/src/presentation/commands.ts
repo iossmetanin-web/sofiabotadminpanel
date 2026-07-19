@@ -5,7 +5,7 @@ import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { deps } from "./deps.js";
 import { env, isAdmin } from "../config/env.js";
-import { SOFIA_SYSTEM_PROMPT, RETURN_GREETING_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN } from "../domain/prompts.js";
+import { SOFIA_SYSTEM_PROMPT, RETURN_GREETING_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN, DREAM_PROMPT_RU, DREAM_PROMPT_EN } from "../domain/prompts.js";
 import { getZodiacFromIso, ageGroupFromYear } from "../domain/zodiac.js";
 import { generateReferralCode } from "../infrastructure/repositories.js";
 import { behavior } from "../config/env.js";
@@ -252,6 +252,20 @@ async function sendAffirmation(ctx: Context, user: { telegramId: string; languag
   await ctx.reply(`${t(loc, "affirmation_intro")}\n\n${loc === "en" ? "Be like still water today. 🌙" : "Будь как тихая вода сегодня. 🌙"}`, {
     parse_mode: "HTML",
     reply_markup: homeOnlyKeyboard(loc),
+  });
+}
+
+// /dream — dream interpretation (free, uses LLM).
+export async function cmdDream(ctx: Context): Promise<void> {
+  if (!ctx.from) return;
+  const d = deps();
+  const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
+  if (!user) { await cmdStart(ctx); return; }
+  const loc: Locale = user.language;
+  await d.repos.users.setState(user.telegramId, "DREAM");
+  await ctx.reply(t(loc, "dream_ask"), {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().text(t(loc, "menu_back"), "nav:back"),
   });
 }
 

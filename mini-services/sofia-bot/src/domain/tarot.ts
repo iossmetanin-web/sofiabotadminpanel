@@ -93,6 +93,12 @@ export const SPREADS: Record<string, SpreadDefinition> = {
     positions: ["Путь А", "Путь Б", "Что скажет сердце"],
     instruction: "Загадай три числа от 1 до 78 — они помогут выбрать.",
   },
+  yes_no: {
+    type: "yes_no",
+    cardCount: 1,
+    positions: ["Ответ"],
+    instruction: "Загадай одно число от 1 до 78 — карта ответит «да» или «нет».",
+  },
 };
 
 export const FATE_CARD_PARTS = [

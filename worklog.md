@@ -277,3 +277,133 @@ Stage Summary:
   2. Configure a real Mini App URL via @BotFather (`/newapp` or `Web App` button) — currently the Mini App button shows an explanatory placeholder.
   3. Real payment integration (Telegram Stars invoices) — currently the buy menu shows a "soon" message; data model is in place.
 - Next cron round can pick up: persona variations (3 Sofia voices), payment integration with `bot.api.sendInvoice`, Mini App HTML page, more tarot spreads.
+
+---
+Task ID: 5
+Agent: admin-panel-overhaul
+Task: Overhaul admin panel — add Economy + Settings tabs, styling improvements, micro-interactions, animated counters, better empty states, reading expansion, user row actions, export buttons, improved footer, tab transitions.
+
+Work Log:
+- Read worklog.md and existing page.tsx (~1099 lines) to understand current 6-tab admin panel.
+- Read globals.css to understand existing animations.
+- Read API route implementations: /api/economy, /api/settings, /api/export — confirmed all endpoints exist and return expected shapes.
+- Added 4 new CSS animations to globals.css:
+  * sofia-count-up (opacity+translateY entrance)
+  * sofia-card-enter (scale+translateY entrance)
+  * sofia-pulse-dot (opacity pulse for footer dot)
+  * sofia-border-glow (border-color glow cycle for settings)
+- Added 2 new type definitions: EconomyData, SettingsData
+- Added new constants: TX_TYPE_LABELS, TX_TYPE_COLORS, TX_TYPE_BAR_COLORS, CARD_HOVER, CARD_BASE
+- Created AnimatedNumber component using useRef + requestAnimationFrame for smooth count-up animation (lint-compliant: no setState in effect, no ref access during render)
+- Created EmptyState component (icon + title + description + optional CTA button)
+- Added Economy tab (💰 Экономика):
+  * 4 KPI stat cards: totalSpent, totalInCirculation, avgBalance, zeroBalanceUsers
+  * Crystal Flow visualization: horizontal bars showing totalAdded vs totalSpent
+  * Type breakdown: colored progress bars for each transaction type with counts/totals
+  * Transaction table: paginated, user name, type badge (color-coded), amount (+green/-red), description, balance after, date
+  * Type filter: button group to filter by spend/add/daily_bonus/referral/admin_gift
+- Added Settings tab (⚙️ Настройки):
+  * Bot configuration cards with all settings from /api/settings
+  * Each setting: key as read-only label, value as editable Input, save button per setting
+  * Visual indicators: modified badge (sofia-border-glow), saved confirmation, last-updated time
+  * Quick actions: "Начислить всем" (gift crystals via AlertDialog + PATCH /api/settings), "Сбросить серии" (reset streaks via AlertDialog)
+- Styling improvements throughout:
+  * All Card components: added CARD_HOVER classes (transition-all duration-300 hover:shadow-lg hover:shadow-amber-900/20 hover:border-amber-800/50 hover:-translate-y-0.5)
+  * StatCard: added hover:scale-[1.02]
+  * Tab triggers: added transition-all duration-200
+  * ActivityChart bars: added hover glow effect (group-hover:shadow-[0_0_8px_rgba(...)])
+- Better empty states:
+  * Overview readings-by-type: EmptyState with 🔮 icon + CTA
+  * Users tab: EmptyState with 👤 icon + "Поделиться ботом" CTA
+  * Readings tab: EmptyState with 🔮 icon + "Открыть бота" CTA
+  * Activity chart: EmptyState with 📊 icon
+  * Economy: EmptyState for no transactions and no type breakdown
+  * Digest: EmptyState for top users and readings
+  * Broadcasts: EmptyState with 📨 icon + CTA
+  * Settings: EmptyState with ⚙️ icon
+- Reading detail expansion:
+  * Each reading row wrapped in Collapsible component
+  * Click chevron to expand/collapse full interpretation text
+  * Shows question text when expanded
+  * Visual indicator: border changes to amber when expanded
+- User row actions:
+  * "Профиль" button (ExternalLink icon) opens user's Telegram conversation
+  * "💎 +" button (Gem icon) gifts 5 crystals via PATCH /api/settings
+  * Both with tooltips
+- Export buttons:
+  * DropdownMenu in header with Download icon
+  * Three options: "Пользователи CSV", "Расклады CSV", "Транзакции CSV"
+  * Each triggers download via /api/export?type=...
+- Improved footer:
+  * Gradient top border (via borderTopImage)
+  * Version info with pulse dot (v2.0)
+  * Links to docs, worklog, bot
+  * Two-line layout with centered content
+- Tab content transitions:
+  * Each TabsContent wrapped in div with sofia-fade-in class for smooth entry
+- Tab list refactored to use map for cleaner code with 8 tabs
+- All 6 original tabs preserved with identical functionality
+- Verified: bun run lint — 0 errors, 0 warnings
+- Verified: dev server running, API calls succeeding
+
+Stage Summary:
+- Admin panel expanded from 6 to 8 tabs (added Economy + Settings)
+- Economy tab provides full crystal flow visualization, type breakdown, and paginated transaction table with filtering
+- Settings tab allows live editing of bot configuration with save confirmation and quick actions
+- Micro-interactions added to all cards (hover shadows, scale, glow effects)
+- AnimatedNumber component provides smooth count-up animation on all stat cards
+- Better empty states with icons, descriptions, and CTAs throughout
+- Reading expansion via Collapsible for full interpretation text
+- User row actions for profile link and crystal gifting
+- Export dropdown for CSV download of users, readings, transactions
+- Footer improved with version, pulse dot, and gradient border
+- All changes are backward-compatible; no existing functionality removed
+- Lint clean: 0 errors, 0 warnings
+
+---
+Task ID: 6
+Agent: orchestrator (main, webDevReview cron)
+Task: Assess project status, QA all 8 tabs, add new bot features (/dream, Yes/No tarot), add new API endpoints (economy, settings, export), verify everything works.
+
+Work Log:
+- Read worklog.md and assessed current project state (8-tab admin panel, running bot, clean lint/tsc).
+- Verified bot running: heartbeat 3s old, process alive.
+- Ran QA via agent-browser on all 6 existing tabs (Overview, Users, Readings, Streaks, Digest, Broadcasts) — all rendering correctly.
+- Created 3 new API endpoints:
+  * GET /api/economy — transaction history, summary stats, type breakdown, pagination, type filtering
+  * GET /api/settings + PATCH /api/settings — bot config read/write
+  * GET /api/export?type=users|readings|transactions — CSV export
+- Delegated admin panel overhaul to full-stack-developer subagent (Task ID 5):
+  * Added 2 new tabs: Economy (💰) and Settings (⚙️) — total now 8 tabs
+  * Micro-interactions on all cards, animated counters, better empty states
+  * Reading detail expansion, user row actions, export dropdown
+  * Improved footer with version info and gradient border
+  * New CSS animations: sofia-count-up, sofia-card-enter, sofia-pulse-dot, sofia-border-glow
+- Added bot features:
+  * /dream command — dream interpretation via LLM (free, DREAM state)
+  * Yes/No tarot reading (✨ Да/Нет) — 1💎 cost, draws 1 card, asks for question
+  * New prompts: DREAM_PROMPT_RU/EN, YES_NO_PROMPT_RU/EN
+  * New i18n keys: dream_cmd_desc, dream_prompt, dream_ask, yes_no, yes_no_ask, yes_no_cost
+  * New FSM states: DREAM, YES_NO_ASK
+  * Yes/No spread definition in tarot.ts
+  * Dream button in main menu keyboard
+  * Yes/No button in reading menu keyboard
+  * Dream and Yes/No triggers in detectReadingType
+  * yes_no label in formatReadingHistoryItem
+- Updated admin panel READING_LABELS and READING_COLORS to include yes_no type
+- Restarted bot cleanly: heartbeat fresh, all schedulers running
+- Final QA via agent-browser: all 8 tabs render correctly (Overview, Users, Readings, Streaks, Economy, Digest, Broadcasts, Settings)
+- Verified all new API endpoints return correct data
+- Verified: bun run lint — 0 errors, 0 warnings
+- Verified: bot tsc --noEmit — 0 errors
+
+Stage Summary:
+- Admin panel now has 8 tabs with Economy and Settings tabs
+- Bot has 2 new features: /dream command and Yes/No tarot reading
+- 3 new API endpoints: /api/economy, /api/settings, /api/export
+- All code clean (lint + tsc), bot running, admin panel rendering correctly
+- Known follow-ups for the owner:
+  1. Enable inline mode via @BotFather (/setinline) — code is ready
+  2. Configure a real Mini App URL via @BotFather — currently placeholder
+  3. Real payment integration (Telegram Stars invoices) — data model is in place
+  4. Persona variations (3 Sofia voices) — documented in Roadmap

@@ -21,6 +21,8 @@ export type SofiaState =
   | "HOROSCOPE"
   | "SINGLE_CARD"
   | "CARD_OF_DAY"
+  | "DREAM"
+  | "YES_NO_ASK"
   | "BLOCKED"
   | "AWAIT_DELETE_CONFIRM"
   | "BROADCAST"
@@ -37,5 +39,5 @@ export function isOnboarding(state: SofiaState): boolean {
 
 export function isReadingState(state: SofiaState): boolean {
   return ["TARO_SMALL", "TARO_FULL", "TARO_LOVE", "TARO_CAREER", "TARO_DECISION",
-    "HOROSCOPE", "SINGLE_CARD", "CARD_OF_DAY"].includes(state);
+    "HOROSCOPE", "SINGLE_CARD", "CARD_OF_DAY", "YES_NO_ASK"].includes(state);
 }
