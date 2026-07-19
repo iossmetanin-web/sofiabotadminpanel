@@ -1,12 +1,19 @@
-// Sofia Bot — Prisma schema (SQLite, shared by bot mini-service + Next.js admin)
-// Clean Architecture: this schema lives in Infrastructure layer. Domain entities
-// are plain TS classes mapped to/from these models by repositories.
+// Sofia Bot — Prisma schema
+// Local dev: SQLite. Production (Vercel + Render bot): PostgreSQL (Neon/Supabase).
+// To switch to PostgreSQL for Vercel deployment, change `provider` to "postgresql"
+// and set DATABASE_URL to your hosted Postgres connection string.
+//
+// This schema is shared between:
+//   - Next.js admin panel (Vercel serverless)
+//   - Python bot (Render/Fly.io/Railway long-running, aiogram long polling)
+// The Python bot uses the same DB via asyncpg/SQLAlchemy.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
+  // For Vercel production: provider = "postgresql"
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
@@ -184,4 +191,39 @@ model Broadcast {
   total       Int      @default(0)
   status      String   @default("pending") // "pending"|"sending"|"done"|"failed"
   createdAt   DateTime @default(now())
+}
+
+/// Command queue: admin panel (Next.js/Vercel) → Python bot (Render).
+/// Admin enqueues commands; the Python bot polls this table every ~2s
+/// and executes them (broadcast, ban, gift crystals, send DM, etc.).
+/// This decouples the serverless admin from the long-running bot.
+model BotCommand {
+  id         String   @id @default(cuid())
+  // Command type: "broadcast" | "dm" | "ban" | "unban" | "gift_crystals"
+  //             | "set_subscription" | "reload_config" | "shutdown"
+  type       String
+  // JSON payload specific to command type, e.g. {"telegramId":"123","text":"hi"}
+  payload    String
+  status     String   @default("pending") // "pending"|"processing"|"done"|"failed"
+  result     String?  // JSON result/error from the bot
+  createdAt  DateTime @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([type, status])
+}
+
+/// Heartbeat: the Python bot updates this row every 15-30s.
+/// Admin panel reads it to show online/offline status.
+/// This works across Vercel (read-only) + Render (write) via shared DB.
+model BotHeartbeat {
+  id           String   @id @default("singleton")
+  lastBeatAt   DateTime @default(now())
+  pid          Int?
+  hostname     String?
+  version      String?
+  uptime       Int? // seconds
+  pollingMode  String  @default("long_polling") // "long_polling" | "webhook"
+  @@index([lastBeatAt])
 }

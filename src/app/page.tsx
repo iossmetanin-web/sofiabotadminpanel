@@ -35,6 +35,7 @@ import {
   Eye, Settings, Download, ChevronDown, ChevronUp, Wallet,
   Plus, Minus, ExternalLink, FileDown, RotateCcw, Save, Check,
   HandCoins, UserPlus, BadgePercent, Search, ArrowRight, ArrowLeft,
+  Ban, ShieldCheck, Power, Terminal, ServerCog,
 } from 'lucide-react';
 import { Sparkline } from '@/components/sofia/Sparkline';
 import { ZodiacWheel } from '@/components/sofia/ZodiacWheel';
@@ -73,6 +74,33 @@ type BroadcastRow = {
   id: string; text: string; sentCount: number; failedCount: number; total: number;
   status: string; createdAt: string;
   user: { username: string | null; firstName: string | null } | null;
+};
+
+type BotCommandRow = {
+  id: string;
+  type: string;
+  payload: string;
+  status: string;
+  result: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+type BotStatus = {
+  ok: boolean;
+  status: 'online' | 'offline';
+  username?: string;
+  lastHeartbeat?: string | null;
+  lastBeatAt?: string | null;
+  ageSeconds?: number | null;
+  lagSeconds?: number | null;
+  pid?: number | null;
+  hostname?: string | null;
+  version?: string | null;
+  uptime?: number | null;
+  pollingMode?: string;
+  error?: string;
 };
 
 type ActivityBucket = {
@@ -123,7 +151,7 @@ type SettingsData = {
   settings: { id: string; key: string; value: string; updatedAt: string }[];
 };
 
-type TabKey = 'overview' | 'users' | 'readings' | 'streaks' | 'economy' | 'digest' | 'broadcasts' | 'settings';
+type TabKey = 'overview' | 'users' | 'readings' | 'streaks' | 'economy' | 'digest' | 'broadcasts' | 'manage' | 'settings';
 
 /* ─── Constants ─────────────────────────────────────────────────────── */
 
@@ -183,8 +211,50 @@ const TABS: { value: TabKey; label: string }[] = [
   { value: 'economy', label: 'Экономика' },
   { value: 'digest', label: 'Дайджест' },
   { value: 'broadcasts', label: 'Рассылки' },
+  { value: 'manage', label: 'Управление' },
   { value: 'settings', label: 'Настройки' },
 ];
+
+const COMMAND_TYPE_LABELS: Record<string, string> = {
+  broadcast: 'Рассылка',
+  dm: 'Личное сообщение',
+  ban: 'Бан',
+  unban: 'Разбан',
+  gift_crystals: 'Подарок кристаллов',
+  set_subscription: 'Подписка',
+  reload_config: 'Перезагрузка конфига',
+  shutdown: 'Остановка бота',
+};
+
+function commandStatusBadge(status: string): { label: string; color: string } {
+  switch (status) {
+    case 'pending':
+      return { label: 'в очереди', color: 'text-zinc-400' };
+    case 'processing':
+      return { label: 'выполняется', color: 'text-amber-400' };
+    case 'done':
+      return { label: 'готово', color: 'text-emerald-400' };
+    case 'failed':
+      return { label: 'ошибка', color: 'text-rose-400' };
+    default:
+      return { label: status, color: 'text-zinc-400' };
+  }
+}
+
+function broadcastStatusLabel(status: string): { label: string; color: string } {
+  switch (status) {
+    case 'pending':
+      return { label: 'в очереди', color: 'text-zinc-400' };
+    case 'sending':
+      return { label: 'отправляется', color: 'text-amber-400' };
+    case 'done':
+      return { label: 'отправлено', color: 'text-emerald-400' };
+    case 'failed':
+      return { label: 'ошибка', color: 'text-rose-400' };
+    default:
+      return { label: status, color: 'text-zinc-400' };
+  }
+}
 
 /* ─── Utility ───────────────────────────────────────────────────────── */
 
@@ -226,9 +296,7 @@ export default function Page() {
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [economy, setEconomy] = useState<EconomyData | null>(null);
   const [settingsData, setSettingsData] = useState<SettingsData | null>(null);
-  const [botStatus, setBotStatus] = useState<{
-    ok: boolean; username?: string; lastHeartbeat?: string; ageSeconds?: number; error?: string;
-  } | null>(null);
+  const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [broadcastText, setBroadcastText] = useState('');
   const [sending, setSending] = useState(false);
@@ -249,6 +317,16 @@ export default function Page() {
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [giftAmount, setGiftAmount] = useState('10');
   const [quickActionLoading, setQuickActionLoading] = useState(false);
+
+  // Bot control (Command Center) state
+  const [commands, setCommands] = useState<BotCommandRow[]>([]);
+  const [dmTelegramId, setDmTelegramId] = useState('');
+  const [dmText, setDmText] = useState('');
+  const [giftCmdTelegramId, setGiftCmdTelegramId] = useState('');
+  const [giftCmdAmount, setGiftCmdAmount] = useState('5');
+  const [banTelegramId, setBanTelegramId] = useState('');
+  const [cmdLoading, setCmdLoading] = useState<Record<string, boolean>>({});
+  const [shutdownDialogOpen, setShutdownDialogOpen] = useState(false);
 
   /* ─── Data fetchers ─────────────────────────────────────────────── */
 
@@ -341,8 +419,19 @@ export default function Page() {
   const fetchBotStatus = useCallback(async () => {
     setLoading((l) => ({ ...l, bot: true }));
     try { const res = await fetch('/api/bot/status'); const data = await res.json(); setBotStatus(data); }
-    catch { setBotStatus({ ok: false, error: 'недоступен' }); }
+    catch { setBotStatus({ ok: false, status: 'offline', error: 'недоступен' }); }
     finally { setLoading((l) => ({ ...l, bot: false })); }
+  }, []);
+
+  const fetchCommands = useCallback(async () => {
+    setLoading((l) => ({ ...l, commands: true }));
+    try {
+      const res = await fetch('/api/bot/command?limit=50');
+      const data = await res.json();
+      setCommands(Array.isArray(data.commands) ? data.commands : []);
+    } catch {
+      /* silent */
+    } finally { setLoading((l) => ({ ...l, commands: false })); }
   }, []);
 
   /* ─── Effects ───────────────────────────────────────────────────── */
@@ -357,12 +446,22 @@ export default function Page() {
     if (activeTab === 'overview' && !referrals) fetchReferrals();
     if (activeTab === 'economy' && !economy) fetchEconomy(1, '');
     if (activeTab === 'settings' && !settingsData) fetchSettings();
-  }, [activeTab, streaks, digest, referrals, economy, settingsData, fetchStreaks, fetchDigest, fetchReferrals, fetchEconomy, fetchSettings]);
+    if (activeTab === 'manage' && commands.length === 0) fetchCommands();
+  }, [activeTab, streaks, digest, referrals, economy, settingsData, commands, fetchStreaks, fetchDigest, fetchReferrals, fetchEconomy, fetchSettings, fetchCommands]);
 
   useEffect(() => {
     const t = setInterval(() => { fetchBotStatus(); }, 30_000);
     return () => clearInterval(t);
   }, [fetchBotStatus]);
+
+  // Auto-refresh command history while there are pending/processing commands.
+  useEffect(() => {
+    if (activeTab !== 'manage') return;
+    const hasActive = commands.some((c) => c.status === 'pending' || c.status === 'processing');
+    if (!hasActive) return;
+    const t = setInterval(() => { fetchCommands(); }, 5_000);
+    return () => clearInterval(t);
+  }, [activeTab, commands, fetchCommands]);
 
   /* ─── Handlers ──────────────────────────────────────────────────── */
 
@@ -443,6 +542,104 @@ export default function Page() {
     window.open(`/api/export?type=${type}`, '_blank');
   };
 
+  /* ─── Bot command helpers ───────────────────────────────────────── */
+
+  const enqueueCommand = async (
+    key: string,
+    type: string,
+    payload: Record<string, unknown>,
+    successMsg: string,
+  ): Promise<boolean> => {
+    setCmdLoading((s) => ({ ...s, [key]: true }));
+    try {
+      const res = await fetch('/api/bot/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, payload }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(successMsg);
+        fetchCommands();
+        return true;
+      }
+      toast.error(data.error ?? 'Не удалось поставить команду в очередь');
+      return false;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      toast.error('Ошибка: ' + msg);
+      return false;
+    } finally {
+      setCmdLoading((s) => ({ ...s, [key]: false }));
+    }
+  };
+
+  const sendDm = async () => {
+    if (!dmTelegramId.trim()) { toast.error('Введите Telegram ID'); return; }
+    if (!dmText.trim()) { toast.error('Введите текст сообщения'); return; }
+    const ok = await enqueueCommand(
+      'dm',
+      'dm',
+      { telegramId: dmTelegramId.trim(), text: dmText },
+      `Сообщение поставлено в очередь для ${dmTelegramId.trim()}`,
+    );
+    if (ok) { setDmTelegramId(''); setDmText(''); }
+  };
+
+  const sendGiftCmd = async () => {
+    if (!giftCmdTelegramId.trim()) { toast.error('Введите Telegram ID'); return; }
+    const amount = parseInt(giftCmdAmount, 10);
+    if (isNaN(amount) || amount <= 0) { toast.error('Некорректное количество'); return; }
+    const ok = await enqueueCommand(
+      'gift',
+      'gift_crystals',
+      { telegramId: giftCmdTelegramId.trim(), amount },
+      `+${amount} кристаллов для ${giftCmdTelegramId.trim()} поставлено в очередь`,
+    );
+    if (ok) { setGiftCmdTelegramId(''); setGiftCmdAmount('5'); }
+  };
+
+  const banUser = async () => {
+    if (!banTelegramId.trim()) { toast.error('Введите Telegram ID'); return; }
+    const ok = await enqueueCommand(
+      'ban',
+      'ban',
+      { telegramId: banTelegramId.trim() },
+      `Бан пользователя ${banTelegramId.trim()} поставлен в очередь`,
+    );
+    if (ok) setBanTelegramId('');
+  };
+
+  const unbanUser = async () => {
+    if (!banTelegramId.trim()) { toast.error('Введите Telegram ID'); return; }
+    const ok = await enqueueCommand(
+      'unban',
+      'unban',
+      { telegramId: banTelegramId.trim() },
+      `Разбан пользователя ${banTelegramId.trim()} поставлен в очередь`,
+    );
+    if (ok) setBanTelegramId('');
+  };
+
+  const reloadConfig = async () => {
+    await enqueueCommand(
+      'reload',
+      'reload_config',
+      {},
+      'Перезагрузка конфигурации поставлена в очередь',
+    );
+  };
+
+  const shutdownBot = async () => {
+    const ok = await enqueueCommand(
+      'shutdown',
+      'shutdown',
+      {},
+      'Команда остановки бота поставлена в очередь',
+    );
+    if (ok) setShutdownDialogOpen(false);
+  };
+
   const refreshCurrentTab = () => {
     if (activeTab === 'overview') { fetchStats(); fetchBotStatus(); fetchActivity(); fetchReferrals(); }
     if (activeTab === 'users') fetchUsers(usersPage, search);
@@ -451,6 +648,7 @@ export default function Page() {
     if (activeTab === 'economy') fetchEconomy(ecoPage, ecoType);
     if (activeTab === 'digest') fetchDigest();
     if (activeTab === 'broadcasts') fetchBroadcasts();
+    if (activeTab === 'manage') { fetchCommands(); fetchBotStatus(); }
     if (activeTab === 'settings') fetchSettings();
   };
 
@@ -506,14 +704,35 @@ export default function Page() {
                       }`}
                     />
                     <span className="text-zinc-300 font-mono tabular-nums">
-                      {loading.bot ? '...' : botStatus?.ok ? `${botStatus.ageSeconds ?? 0}s` : 'offline'}
+                      {loading.bot ? '...'
+                        : botStatus?.ok ? `${botStatus.lagSeconds ?? botStatus.ageSeconds ?? 0}s`
+                        : 'offline'}
                     </span>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent>
-                  {botStatus?.lastHeartbeat
-                    ? `Heartbeat: ${new Date(botStatus.lastHeartbeat).toLocaleString('ru-RU')}`
-                    : 'Нет данных'}
+                <TooltipContent className="max-w-[280px]">
+                  <div className="text-xs space-y-1 font-mono">
+                    <div className="font-semibold">
+                      {botStatus?.ok ? 'Бот онлайн' : 'Бот оффлайн'}
+                    </div>
+                    {botStatus?.lastBeatAt && (
+                      <div className="text-zinc-400">
+                        Heartbeat: {new Date(botStatus.lastBeatAt).toLocaleString('ru-RU')}
+                      </div>
+                    )}
+                    {botStatus?.hostname && (
+                      <div className="text-zinc-400">Host: {botStatus.hostname}</div>
+                    )}
+                    {botStatus?.version && (
+                      <div className="text-zinc-400">Version: {botStatus.version}</div>
+                    )}
+                    {botStatus?.pollingMode && (
+                      <div className="text-zinc-400">Mode: {botStatus.pollingMode}</div>
+                    )}
+                    {!botStatus?.lastBeatAt && (
+                      <div className="text-zinc-500">Нет данных — бот ещё не запускался</div>
+                    )}
+                  </div>
                 </TooltipContent>
               </Tooltip>
 
@@ -644,9 +863,24 @@ export default function Page() {
 
                 <StaggerItem className="md:col-span-2">
                   <BentoTile className="h-full flex flex-col">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-3">
-                      Бот
-                    </p>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                        Бот
+                      </p>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={fetchBotStatus}
+                            className="text-zinc-500 hover:text-amber-400 transition-colors active:translate-y-px"
+                            aria-label="Обновить статус бота"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${loading.bot ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>Обновить статус</TooltipContent>
+                      </Tooltip>
+                    </div>
                     <div className="flex items-center gap-3 mb-3">
                       <span
                         className={`flex h-2.5 w-2.5 rounded-full ${
@@ -660,13 +894,21 @@ export default function Page() {
                     <div className="space-y-1.5 text-xs font-mono tabular-nums text-zinc-400">
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Аптайм</span>
-                        <span>{botStatus?.ageSeconds ?? 0}s</span>
+                        <span>{botStatus?.uptime != null ? `${Math.floor(botStatus.uptime / 60)}м ${botStatus.uptime % 60}с` : '—'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Хартбит</span>
-                        <span className="truncate ml-2 max-w-[10ch]">
-                          {botStatus?.lastHeartbeat ? timeAgo(botStatus.lastHeartbeat) : 'нет'}
+                        <span className="truncate ml-2 max-w-[12ch]">
+                          {botStatus?.lastBeatAt ? timeAgo(botStatus.lastBeatAt) : 'нет'}
                         </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Хост</span>
+                        <span className="truncate ml-2 max-w-[12ch]">{botStatus?.hostname ?? '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Версия</span>
+                        <span className="truncate ml-2 max-w-[12ch]">{botStatus?.version ?? '—'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Заблок.</span>
@@ -1660,7 +1902,7 @@ export default function Page() {
             <TabTransition className="space-y-5">
               <SectionHeader
                 title="Рассылки"
-                description="Отправка сообщений всем пользователям. Рассылка уходит асинхронно - бот забирает её из БД каждые 8 секунд."
+                description="Отправка сообщений всем пользователям. Команда ставится в очередь — Python-бот забирает её из БД и обновляет прогресс в реальном времени."
               />
 
               <BentoTile>
@@ -1680,7 +1922,7 @@ export default function Page() {
                 />
                 <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
                   <p className="text-[11px] text-zinc-500 max-w-[60ch] leading-relaxed">
-                    Рассылка отправится асинхронно - бот берёт её из БД каждые 8 секунд.
+                    Команда отправляется в очередь <code className="text-amber-400/80">BotCommand</code>. Бот берёт её в течение ~2 секунд.
                   </p>
                   <Button
                     onClick={sendBroadcast}
@@ -1688,14 +1930,19 @@ export default function Page() {
                     className="bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
                   >
                     <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
-                    {sending ? 'Отправка...' : 'Отправить'}
+                    {sending ? 'Постановка в очередь...' : 'Поставить в очередь'}
                   </Button>
                 </div>
               </BentoTile>
 
               <BentoTile>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-zinc-100">История рассылок</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-100">История рассылок</h3>
+                    <p className="text-[11px] text-zinc-500 mt-0.5 font-mono">
+                      Статус обновляется ботом по мере отправки. <span className="text-amber-400/70">в очереди → отправляется → отправлено</span>
+                    </p>
+                  </div>
                   <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{fmtNum(broadcasts.length)}</span>
                 </div>
                 <div className="divide-y divide-zinc-800/70 -mx-1 max-h-96 overflow-y-auto sofia-scroll">
@@ -1703,21 +1950,380 @@ export default function Page() {
                   {!loading.broadcasts && broadcasts.length === 0 && (
                     <EmptyState icon={Send} title="Рассылок пока не было" description="Создайте первую рассылку, чтобы уведомить пользователей" />
                   )}
-                  {broadcasts.map((b) => (
-                    <div key={b.id} className="px-1 py-2.5 hover:bg-zinc-900/40 transition-colors -mx-1 px-2 rounded">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className={`text-[11px] font-mono ${b.status === 'done' ? 'text-amber-400' : 'text-zinc-500'}`}>
-                          {b.status === 'done' ? 'отправлено' : b.status}
-                        </span>
-                        <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{timeAgo(b.createdAt)}</span>
+                  {broadcasts.map((b) => {
+                    const sl = broadcastStatusLabel(b.status);
+                    const progress = b.total > 0 ? Math.round(((b.sentCount + b.failedCount) / b.total) * 100) : 0;
+                    return (
+                      <div key={b.id} className="px-2 py-3 hover:bg-zinc-900/40 transition-colors rounded">
+                        <div className="flex items-center justify-between mb-1.5 gap-2">
+                          <span className={`text-[11px] font-mono inline-flex items-center gap-1.5 ${sl.color}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${
+                              b.status === 'pending' ? 'bg-zinc-500' :
+                              b.status === 'sending' ? 'bg-amber-400 sofia-pulse-dot' :
+                              b.status === 'done' ? 'bg-emerald-400' :
+                              'bg-rose-400'
+                            }`} />
+                            {sl.label}
+                          </span>
+                          <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{timeAgo(b.createdAt)}</span>
+                        </div>
+                        <p className="text-sm text-zinc-300 line-clamp-2 mb-2">{b.text}</p>
+                        <div className="flex items-center gap-3 text-[11px] text-zinc-500 font-mono tabular-nums mb-1.5">
+                          <span>Отправлено: {b.sentCount} / {b.total}</span>
+                          {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+                          {(b.status === 'sending' || b.status === 'pending') && (
+                            <span className="text-amber-400/80">{progress}%</span>
+                          )}
+                        </div>
+                        {b.total > 0 && (b.status === 'sending' || b.status === 'pending') && (
+                          <div className="h-1 bg-zinc-800/70 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-amber-500/70 rounded-full transition-all duration-500"
+                              style={{ width: `${progress}%` }}
+                            />
+                          </div>
+                        )}
                       </div>
-                      <p className="text-sm text-zinc-300 line-clamp-2 mb-1">{b.text}</p>
-                      <div className="flex items-center gap-3 text-[11px] text-zinc-500 font-mono tabular-nums">
-                        <span>Отправлено: {b.sentCount} / {b.total}</span>
-                        {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+                    );
+                  })}
+                </div>
+              </BentoTile>
+            </TabTransition>
+          )}
+
+          {/* MANAGE (Command Center) */}
+          {activeTab === 'manage' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Управление ботом"
+                description="Команды ставятся в очередь (BotCommand) и выполняются Python-ботом в течение ~2 секунд. История обновляется автоматически."
+                right={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { fetchCommands(); fetchBotStatus(); }}
+                    className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 active:translate-y-px"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading.commands ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+                    <span className="ml-1.5">Обновить</span>
+                  </Button>
+                }
+              />
+
+              {/* Bot status snapshot */}
+              <BentoTile>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-3 w-3 rounded-full ${
+                        botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                      }`}
+                    />
+                    <div>
+                      <div className="text-sm font-semibold text-zinc-100">
+                        {loading.bot ? '...' : botStatus?.ok ? 'Бот онлайн' : 'Бот оффлайн'}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 font-mono">
+                        {botStatus?.lastBeatAt
+                          ? `Heartbeat ${timeAgo(botStatus.lastBeatAt)}`
+                          : 'Бот ещё не запускался (или не подключён к БД)'}
                       </div>
                     </div>
-                  ))}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5 text-[11px] font-mono tabular-nums">
+                    <div>
+                      <div className="text-zinc-500 uppercase tracking-wider">Хост</div>
+                      <div className="text-zinc-300 truncate max-w-[18ch]">{botStatus?.hostname ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-zinc-500 uppercase tracking-wider">Версия</div>
+                      <div className="text-zinc-300">{botStatus?.version ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-zinc-500 uppercase tracking-wider">Аптайм</div>
+                      <div className="text-zinc-300">
+                        {botStatus?.uptime != null ? `${Math.floor(botStatus.uptime / 60)}м ${botStatus.uptime % 60}с` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-zinc-500 uppercase tracking-wider">PID</div>
+                      <div className="text-zinc-300">{botStatus?.pid ?? '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              </BentoTile>
+
+              {/* Command center grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Direct message */}
+                <BentoTile>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Mail className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Личное сообщение</h3>
+                  </div>
+                  <div className="space-y-3">
+                    <Input
+                      placeholder="Telegram ID (например 987617664)"
+                      value={dmTelegramId}
+                      onChange={(e) => setDmTelegramId(e.target.value)}
+                      className="bg-zinc-950/60 border-zinc-800/70 text-sm font-mono placeholder:text-zinc-600"
+                    />
+                    <Textarea
+                      placeholder="Текст сообщения…"
+                      value={dmText}
+                      onChange={(e) => setDmText(e.target.value)}
+                      rows={3}
+                      maxLength={4096}
+                      className="bg-zinc-950/60 border-zinc-800/70 text-sm resize-none placeholder:text-zinc-600"
+                    />
+                    <Button
+                      onClick={sendDm}
+                      disabled={cmdLoading.dm || !dmTelegramId.trim() || !dmText.trim()}
+                      className="w-full bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
+                    >
+                      <Send className="w-4 h-4 mr-2" strokeWidth={1.5} />
+                      {cmdLoading.dm ? 'Постановка…' : 'Отправить через бота'}
+                    </Button>
+                  </div>
+                </BentoTile>
+
+                {/* Gift crystals */}
+                <BentoTile>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Gift className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Подарить кристаллы</h3>
+                  </div>
+                  <div className="space-y-3">
+                    <Input
+                      placeholder="Telegram ID получателя"
+                      value={giftCmdTelegramId}
+                      onChange={(e) => setGiftCmdTelegramId(e.target.value)}
+                      className="bg-zinc-950/60 border-zinc-800/70 text-sm font-mono placeholder:text-zinc-600"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100000}
+                        placeholder="Количество"
+                        value={giftCmdAmount}
+                        onChange={(e) => setGiftCmdAmount(e.target.value)}
+                        className="bg-zinc-950/60 border-zinc-800/70 text-sm font-mono placeholder:text-zinc-600"
+                      />
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400"
+                          onClick={() => setGiftCmdAmount(String(Math.max(1, (parseInt(giftCmdAmount, 10) || 0) + 1)))}
+                        >
+                          <Plus className="w-3.5 h-3.5" strokeWidth={1.5} />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400"
+                          onClick={() => setGiftCmdAmount(String(Math.max(1, (parseInt(giftCmdAmount, 10) || 0) - 1)))}
+                        >
+                          <Minus className="w-3.5 h-3.5" strokeWidth={1.5} />
+                        </Button>
+                      </div>
+                    </div>
+                    <Button
+                      onClick={sendGiftCmd}
+                      disabled={cmdLoading.gift || !giftCmdTelegramId.trim()}
+                      className="w-full bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
+                    >
+                      <Gem className="w-4 h-4 mr-2" strokeWidth={1.5} />
+                      {cmdLoading.gift ? 'Постановка…' : 'Поставить в очередь'}
+                    </Button>
+                  </div>
+                </BentoTile>
+
+                {/* Ban / Unban */}
+                <BentoTile>
+                  <div className="flex items-center gap-2 mb-4">
+                    <ShieldCheck className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Бан / разбан пользователя</h3>
+                  </div>
+                  <div className="space-y-3">
+                    <Input
+                      placeholder="Telegram ID пользователя"
+                      value={banTelegramId}
+                      onChange={(e) => setBanTelegramId(e.target.value)}
+                      className="bg-zinc-950/60 border-zinc-800/70 text-sm font-mono placeholder:text-zinc-600"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        onClick={banUser}
+                        disabled={cmdLoading.ban || !banTelegramId.trim()}
+                        className="bg-rose-500/90 text-zinc-50 hover:bg-rose-500 active:translate-y-px disabled:opacity-40"
+                      >
+                        <Ban className="w-4 h-4 mr-2" strokeWidth={1.5} />
+                        {cmdLoading.ban ? '…' : 'Забанить'}
+                      </Button>
+                      <Button
+                        onClick={unbanUser}
+                        disabled={cmdLoading.unban || !banTelegramId.trim()}
+                        variant="outline"
+                        className="border-emerald-500/40 bg-emerald-500/5 text-emerald-400 hover:bg-emerald-500/10 active:translate-y-px disabled:opacity-40"
+                      >
+                        <ShieldCheck className="w-4 h-4 mr-2" strokeWidth={1.5} />
+                        {cmdLoading.unban ? '…' : 'Разбанить'}
+                      </Button>
+                    </div>
+                  </div>
+                </BentoTile>
+
+                {/* System controls */}
+                <BentoTile>
+                  <div className="flex items-center gap-2 mb-4">
+                    <ServerCog className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Системные команды</h3>
+                  </div>
+                  <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
+                    Операции с самим ботом: перезагрузка конфигурации и остановка. Выполняются на стороне Python-бота.
+                  </p>
+                  <div className="space-y-2">
+                    <Button
+                      onClick={reloadConfig}
+                      disabled={cmdLoading.reload}
+                      variant="outline"
+                      className="w-full h-9 border-amber-500/40 bg-amber-500/5 text-amber-400 hover:bg-amber-500/10 active:translate-y-px disabled:opacity-40 justify-start"
+                    >
+                      <RotateCcw className={`w-4 h-4 mr-2 ${cmdLoading.reload ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+                      <span className="flex-1 text-left">Перезагрузить конфиг</span>
+                    </Button>
+                    <Button
+                      onClick={() => setShutdownDialogOpen(true)}
+                      disabled={cmdLoading.shutdown}
+                      variant="outline"
+                      className="w-full h-9 border-rose-500/40 bg-rose-500/5 text-rose-400 hover:bg-rose-500/10 active:translate-y-px disabled:opacity-40 justify-start"
+                    >
+                      <Power className="w-4 h-4 mr-2" strokeWidth={1.5} />
+                      <span className="flex-1 text-left">Остановить бота</span>
+                    </Button>
+                  </div>
+
+                  <AlertDialog open={shutdownDialogOpen} onOpenChange={setShutdownDialogOpen}>
+                    <AlertDialogContent className="bg-zinc-900 border-zinc-800">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-zinc-100">Остановить бота?</AlertDialogTitle>
+                        <AlertDialogDescription className="text-zinc-400">
+                          Будет отправлена команда <code className="text-amber-400/80">shutdown</code>. Бот прекратит приём обновлений от Telegram после обработки команды. Перезапуск потребуется вручную на Render.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100">Отмена</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={shutdownBot}
+                          disabled={cmdLoading.shutdown}
+                          className="bg-rose-500 text-zinc-50 hover:bg-rose-400"
+                        >
+                          {cmdLoading.shutdown ? 'Постановка…' : 'Остановить'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </BentoTile>
+              </div>
+
+              {/* Command history */}
+              <BentoTile>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">История команд</h3>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 font-mono tabular-nums">
+                    {fmtNum(commands.length)}{commands.some((c) => c.status === 'pending' || c.status === 'processing') ? ' · авто-обновление 5с' : ''}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-zinc-800/60 overflow-hidden">
+                  <div className="max-h-96 overflow-y-auto sofia-scroll">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-zinc-950/95 backdrop-blur-sm z-10">
+                        <TableRow className="border-zinc-800/60 hover:bg-transparent">
+                          <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Команда</TableHead>
+                          <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Статус</TableHead>
+                          <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Параметры</TableHead>
+                          <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Результат</TableHead>
+                          <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Создана</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {loading.commands && commands.length === 0 && Array.from({ length: 4 }).map((_, i) => (
+                          <TableRow key={i} className="border-zinc-800/60">
+                            {Array.from({ length: 5 }).map((__, j) => (
+                              <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                        {!loading.commands && commands.length === 0 && (
+                          <TableRow className="border-zinc-800/60">
+                            <TableCell colSpan={5}>
+                              <EmptyState
+                                icon={Terminal}
+                                title="Команд пока не было"
+                                description="Отправьте команду из панели выше — она появится здесь"
+                              />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {commands.map((c) => {
+                          const sb = commandStatusBadge(c.status);
+                          let payloadSummary = '';
+                          try {
+                            const p = JSON.parse(c.payload) as Record<string, unknown>;
+                            if (p.telegramId) payloadSummary = `→ ${p.telegramId}`;
+                            if (p.amount !== undefined) payloadSummary = `${p.amount} → ${p.telegramId ?? ''}`;
+                            if (p.text && typeof p.text === 'string') payloadSummary = `"${p.text.slice(0, 32)}${p.text.length > 32 ? '…' : ''}"`;
+                            if (p.broadcastId) payloadSummary = `broadcast ${p.broadcastId.slice(0, 8)}`;
+                          } catch { /* ignore */ }
+                          let resultSummary = '';
+                          if (c.result) {
+                            try {
+                              const r = JSON.parse(c.result) as Record<string, unknown>;
+                              resultSummary = (r.error as string) ?? (r.message as string) ?? c.result.slice(0, 60);
+                            } catch {
+                              resultSummary = c.result.slice(0, 60);
+                            }
+                          }
+                          return (
+                            <TableRow key={c.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                              <TableCell>
+                                <span className="text-xs font-mono text-zinc-200">
+                                  {COMMAND_TYPE_LABELS[c.type] ?? c.type}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <span className={`text-[11px] font-mono inline-flex items-center gap-1.5 ${sb.color}`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${
+                                    c.status === 'pending' ? 'bg-zinc-500' :
+                                    c.status === 'processing' ? 'bg-amber-400 sofia-pulse-dot' :
+                                    c.status === 'done' ? 'bg-emerald-400' :
+                                    'bg-rose-400'
+                                  }`} />
+                                  {sb.label}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-zinc-500 text-xs font-mono truncate max-w-48">
+                                {payloadSummary || '—'}
+                              </TableCell>
+                              <TableCell className="text-zinc-500 text-xs font-mono truncate max-w-48">
+                                {resultSummary || '—'}
+                              </TableCell>
+                              <TableCell className="text-zinc-500 text-xs font-mono tabular-nums text-right whitespace-nowrap">
+                                {timeAgo(c.createdAt)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               </BentoTile>
             </TabTransition>
