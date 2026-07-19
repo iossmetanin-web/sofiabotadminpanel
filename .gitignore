@@ -85,3 +85,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Sandbox infra (not part of admin panel)
+/Caddyfile
+/.zscripts/
