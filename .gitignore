@@ -52,3 +52,36 @@ prompt
 server.log
 # Skills directory
 /skills/
+# === Sofia Admin Panel repo exclusions ===
+# Bot mini-service (separate concern, not part of admin panel repo)
+/mini-services/
+
+# Research workspace (cloned repos for analysis)
+/research/
+
+# Local SQLite database (runtime data, not committed)
+/db/
+
+# Sandbox artifacts
+/upload/
+/download/
+/tool-results/
+/examples/
+
+# Internal docs & handover
+/docs/
+worklog.md
+
+# QA / preview screenshots
+qa-*.png
+sofia-*.png
+sofia-bot.log
+
+# Vercel build output
+.vercel/
+
+# OS / editor
+Thumbs.db
+.idea/
+.vscode/
+*.swp

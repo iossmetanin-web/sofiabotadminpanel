@@ -1,12 +1,17 @@
 'use client';
 
+/* ──────────────────────────────────────────────────────────────────
+   Sofia Bot Admin - control panel
+   Design language: dark charcoal (zinc-950) + antique amber accent,
+   Geist + Geist Mono, hairline tables, mono tabular numerals,
+   asymmetric bento overview, motivated motion only.
+   ────────────────────────────────────────────────────────────────── */
+
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
-  Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter,
-} from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+  Badge,
+} from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -26,14 +31,19 @@ import { toast } from 'sonner';
 import {
   Users, MessageCircle, Sparkles, Gem, TrendingUp, Activity, Send,
   Bot, Heart, Moon, Star, Zap, ScrollText, CircleCheck, CircleAlert, RefreshCw,
-  Flame, Crown, Calendar, Mail, Globe, Languages, Gift, ArrowUpRight, Clock,
-  Sparkle, Layers, Eye, Settings, Download, ChevronDown, ChevronUp, Wallet,
-  DollarSign, Plus, Minus, ExternalLink, FileDown, RotateCcw, Save, Check,
-  CircleDollarSign, HandCoins, UserPlus, BadgePercent,
+  Flame, Crown, Calendar, Mail, Gift, ArrowUpRight, Clock,
+  Eye, Settings, Download, ChevronDown, ChevronUp, Wallet,
+  Plus, Minus, ExternalLink, FileDown, RotateCcw, Save, Check,
+  HandCoins, UserPlus, BadgePercent, Search, ArrowRight, ArrowLeft,
 } from 'lucide-react';
-import { Sparkline, BarSparkline } from '@/components/sofia/Sparkline';
+import { Sparkline } from '@/components/sofia/Sparkline';
 import { ZodiacWheel } from '@/components/sofia/ZodiacWheel';
 import { ZODIAC_EMOJI } from '@/components/sofia/zodiac-data';
+import {
+  SectionHeader, BentoTile, MetricTile, EmptyState, ErrorState,
+  StaggerGroup, StaggerItem, TabTransition, Hairline, MiniBar,
+  AnimatedNumber,
+} from '@/components/sofia/AdminKit';
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
 
@@ -113,53 +123,81 @@ type SettingsData = {
   settings: { id: string; key: string; value: string; updatedAt: string }[];
 };
 
+type TabKey = 'overview' | 'users' | 'readings' | 'streaks' | 'economy' | 'digest' | 'broadcasts' | 'settings';
+
 /* ─── Constants ─────────────────────────────────────────────────────── */
 
 const READING_LABELS: Record<string, string> = {
-  fate_card: '🌟 Карта судьбы', tarot_small: '🃏 Малый', tarot_full: '🌑 Полный',
-  tarot_love: '💑 Любовный', tarot_career: '💼 Карьера', tarot_decision: '🛤 Решение',
-  horoscope: '♈ Гороскоп', single_card: '🃏 Одна карта', card_of_day: '🌙 Карта дня',
-  yes_no: '✨ Да / Нет',
+  fate_card: 'Карта судьбы', tarot_small: 'Малый расклад', tarot_full: 'Полный расклад',
+  tarot_love: 'Любовный', tarot_career: 'Карьера', tarot_decision: 'Решение',
+  horoscope: 'Гороскоп', single_card: 'Одна карта', card_of_day: 'Карта дня',
+  yes_no: 'Да / Нет',
 };
 
-const READING_COLORS: Record<string, string> = {
-  fate_card: '#f59e0b', tarot_small: '#a78bfa', tarot_full: '#60a5fa',
-  tarot_love: '#f472b6', tarot_career: '#34d399', tarot_decision: '#fb923c',
-  horoscope: '#facc15', single_card: '#94a3b8', card_of_day: '#c084fc',
-  yes_no: '#fbbf24',
+// Amber-only stripe palette. Vary opacity to distinguish reading types.
+const READING_BAR_COLOR: Record<string, string> = {
+  fate_card: 'bg-amber-400',
+  tarot_small: 'bg-amber-500',
+  tarot_full: 'bg-amber-300',
+  tarot_love: 'bg-amber-600',
+  tarot_career: 'bg-amber-500/80',
+  tarot_decision: 'bg-amber-400/80',
+  horoscope: 'bg-amber-300/80',
+  single_card: 'bg-zinc-500',
+  card_of_day: 'bg-amber-400/60',
+  yes_no: 'bg-amber-500/60',
+};
+
+const READING_STRIPE: Record<string, string> = {
+  fate_card: 'bg-amber-400',
+  tarot_small: 'bg-amber-500',
+  tarot_full: 'bg-amber-300',
+  tarot_love: 'bg-amber-600',
+  tarot_career: 'bg-amber-500/80',
+  tarot_decision: 'bg-amber-400/80',
+  horoscope: 'bg-amber-300/80',
+  single_card: 'bg-zinc-500',
+  card_of_day: 'bg-amber-400/60',
+  yes_no: 'bg-amber-500/60',
 };
 
 const TX_TYPE_LABELS: Record<string, string> = {
-  spend: '💸 Трата', add: '➕ Начисление', daily_bonus: '🎁 Ежедневный бонус',
-  referral: '🤝 Реферал', admin_gift: '👑 Подарок', subscription: '🔮 Подписка',
+  spend: 'Трата', add: 'Начисление', daily_bonus: 'Ежедневный бонус',
+  referral: 'Реферал', admin_gift: 'Подарок', subscription: 'Подписка',
 };
 
-const TX_TYPE_COLORS: Record<string, string> = {
-  spend: 'bg-rose-900/50 text-rose-300 border-rose-800/50',
-  add: 'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
-  daily_bonus: 'bg-amber-900/50 text-amber-300 border-amber-800/50',
-  referral: 'bg-sky-900/50 text-sky-300 border-sky-800/50',
-  admin_gift: 'bg-purple-900/50 text-purple-300 border-purple-800/50',
-  subscription: 'bg-indigo-900/50 text-indigo-300 border-indigo-800/50',
-};
+const TX_FILTERS: { value: string; label: string }[] = [
+  { value: '', label: 'Все' },
+  { value: 'spend', label: 'Трата' },
+  { value: 'add', label: 'Начисление' },
+  { value: 'daily_bonus', label: 'Бонус' },
+  { value: 'referral', label: 'Реферал' },
+  { value: 'admin_gift', label: 'Подарок' },
+];
 
-const TX_TYPE_BAR_COLORS: Record<string, string> = {
-  spend: '#f43f5e', add: '#10b981', daily_bonus: '#f59e0b',
-  referral: '#38bdf8', admin_gift: '#a78bfa', subscription: '#818cf8',
-};
+const TABS: { value: TabKey; label: string }[] = [
+  { value: 'overview', label: 'Обзор' },
+  { value: 'users', label: 'Пользователи' },
+  { value: 'readings', label: 'Расклады' },
+  { value: 'streaks', label: 'Серии' },
+  { value: 'economy', label: 'Экономика' },
+  { value: 'digest', label: 'Дайджест' },
+  { value: 'broadcasts', label: 'Рассылки' },
+  { value: 'settings', label: 'Настройки' },
+];
 
 /* ─── Utility ───────────────────────────────────────────────────────── */
 
 function timeAgo(iso: string | null): string {
-  if (!iso) return '—';
+  if (!iso) return 'никогда';
   const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'только что';
-  if (m < 60) return `${m} мин назад`;
+  if (m < 60) return `${m} мин`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ч назад`;
+  if (h < 24) return `${h} ч`;
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d} дн назад`;
+  if (d < 30) return `${d} дн`;
   return new Date(iso).toLocaleDateString('ru-RU');
 }
 
@@ -167,60 +205,9 @@ function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }
 
-/* ─── AnimatedNumber Component ──────────────────────────────────────── */
-
-function AnimatedNumber({ value, className }: { value: number; className?: string }) {
-  const spanRef = useRef<HTMLSpanElement>(null);
-  const prevValueRef = useRef(value);
-
-  useEffect(() => {
-    const startVal = prevValueRef.current;
-    const endVal = value;
-    prevValueRef.current = endVal;
-    if (startVal === endVal) return;
-    const duration = 800;
-    const start = performance.now();
-    let raf = 0;
-
-    const tick = (now: number) => {
-      const progress = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const current = Math.round(startVal + (endVal - startVal) * eased);
-      if (spanRef.current) spanRef.current.textContent = current.toLocaleString('ru-RU');
-      if (progress < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [value]);
-
-  return <span ref={spanRef} className={`sofia-count-up ${className ?? ''}`}>{value.toLocaleString('ru-RU')}</span>;
+function fmtNum(n: number): string {
+  return n.toLocaleString('ru-RU');
 }
-
-/* ─── EmptyState Component ──────────────────────────────────────────── */
-
-function EmptyState({ icon, title, description, action, onAction }: {
-  icon: string; title: string; description: string;
-  action?: string; onAction?: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 text-center">
-      <span className="text-4xl mb-3">{icon}</span>
-      <p className="text-stone-300 font-medium mb-1">{title}</p>
-      <p className="text-sm text-stone-500 mb-4 max-w-xs">{description}</p>
-      {action && onAction && (
-        <Button variant="outline" size="sm" onClick={onAction}
-          className="border-amber-800/50 text-amber-300 hover:bg-amber-950/40">
-          {action}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/* ─── Card hover class ──────────────────────────────────────────────── */
-
-const CARD_HOVER = 'transition-all duration-300 hover:shadow-lg hover:shadow-amber-900/20 hover:border-amber-800/50 hover:-translate-y-0.5';
-const CARD_BASE = 'bg-stone-900/60 border-stone-800 backdrop-blur-sm';
 
 /* ─── Main Page ─────────────────────────────────────────────────────── */
 
@@ -239,11 +226,13 @@ export default function Page() {
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [economy, setEconomy] = useState<EconomyData | null>(null);
   const [settingsData, setSettingsData] = useState<SettingsData | null>(null);
-  const [botStatus, setBotStatus] = useState<{ ok: boolean; username?: string; lastHeartbeat?: string; ageSeconds?: number; error?: string } | null>(null);
+  const [botStatus, setBotStatus] = useState<{
+    ok: boolean; username?: string; lastHeartbeat?: string; ageSeconds?: number; error?: string;
+  } | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [broadcastText, setBroadcastText] = useState('');
   const [sending, setSending] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
   // Economy-specific state
   const [ecoPage, setEcoPage] = useState(1);
@@ -266,8 +255,10 @@ export default function Page() {
   const fetchStats = useCallback(async () => {
     setLoading((l) => ({ ...l, stats: true }));
     try { const res = await fetch('/api/stats'); const data = await res.json(); setStats(data); }
-    catch (e: any) { toast.error('Не загрузилась статистика: ' + e.message); }
-    finally { setLoading((l) => ({ ...l, stats: false })); }
+    catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      toast.error('Не загрузилась статистика: ' + msg);
+    } finally { setLoading((l) => ({ ...l, stats: false })); }
   }, []);
 
   const fetchUsers = useCallback(async (page: number, s: string) => {
@@ -386,10 +377,15 @@ export default function Page() {
         body: JSON.stringify({ text: broadcastText }),
       });
       const data = await res.json();
-      if (res.ok) { toast.success(`Рассылка запущена (id: ${data.id}, получателей: ${data.total})`); setBroadcastText(''); fetchBroadcasts(); }
-      else { toast.error(data.error ?? 'Ошибка'); }
-    } catch (e: any) { toast.error('Не удалось отправить: ' + e.message); }
-    finally { setSending(false); }
+      if (res.ok) {
+        toast.success(`Рассылка запущена (id: ${data.id}, получателей: ${data.total})`);
+        setBroadcastText('');
+        fetchBroadcasts();
+      } else { toast.error(data.error ?? 'Ошибка'); }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      toast.error('Не удалось отправить: ' + msg);
+    } finally { setSending(false); }
   };
 
   const saveSetting = async (key: string) => {
@@ -406,9 +402,7 @@ export default function Page() {
         toast.success(`Настройка "${key}" сохранена`);
         setSavedSettings((s) => ({ ...s, [key]: true }));
         setTimeout(() => setSavedSettings((s) => ({ ...s, [key]: false })), 2000);
-      } else {
-        toast.error('Не удалось сохранить');
-      }
+      } else { toast.error('Не удалось сохранить'); }
     } catch { toast.error('Ошибка сохранения'); }
     finally { setSavingSettings((s) => ({ ...s, [key]: false })); }
   };
@@ -423,7 +417,7 @@ export default function Page() {
         body: JSON.stringify({ key: 'pending_gift_all', value: String(amt) }),
       });
       if (res.ok) {
-        toast.success(`💎 Начисление ${amt} кристаллов всем запланировано!`);
+        toast.success(`Начисление ${amt} кристаллов всем запланировано`);
         setGiftDialogOpen(false);
       }
     } catch { toast.error('Ошибка'); }
@@ -438,7 +432,7 @@ export default function Page() {
         body: JSON.stringify({ key: 'pending_reset_streaks', value: 'true' }),
       });
       if (res.ok) {
-        toast.success('🔥 Сброс серий запланирован!');
+        toast.success('Сброс серий запланирован');
         setResetDialogOpen(false);
       }
     } catch { toast.error('Ошибка'); }
@@ -447,6 +441,17 @@ export default function Page() {
 
   const handleExport = (type: string) => {
     window.open(`/api/export?type=${type}`, '_blank');
+  };
+
+  const refreshCurrentTab = () => {
+    if (activeTab === 'overview') { fetchStats(); fetchBotStatus(); fetchActivity(); fetchReferrals(); }
+    if (activeTab === 'users') fetchUsers(usersPage, search);
+    if (activeTab === 'readings') fetchReadings();
+    if (activeTab === 'streaks') fetchStreaks();
+    if (activeTab === 'economy') fetchEconomy(ecoPage, ecoType);
+    if (activeTab === 'digest') fetchDigest();
+    if (activeTab === 'broadcasts') fetchBroadcasts();
+    if (activeTab === 'settings') fetchSettings();
   };
 
   /* ─── Derived ───────────────────────────────────────────────────── */
@@ -462,1116 +467,1436 @@ export default function Page() {
   const newUsersSpark = activity.map((b) => b.newUsers);
   const crystalsSpark = activity.map((b) => b.crystalsSpent);
 
+  const isRefreshing =
+    loading.stats || loading.users || loading.readings || loading.activity ||
+    loading.streaks || loading.referrals || loading.digest || loading.economy ||
+    loading.settings || loading.broadcasts;
+
   /* ─── Render ─────────────────────────────────────────────────────── */
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="min-h-screen flex flex-col bg-stone-950 text-stone-100">
-        {/* Header */}
-        <header className="sticky top-0 z-50 border-b border-amber-900/30 bg-stone-950/85 backdrop-blur-xl">
-          <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="relative w-11 h-11 rounded-full bg-gradient-to-br from-amber-600 via-amber-800 to-stone-900 flex items-center justify-center text-xl shadow-lg shadow-amber-900/40 sofia-glow">
-                <span className="sofia-float">🔮</span>
+      <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
+        {/* ─── Sticky top nav ──────────────────────────────────── */}
+        <header className="sticky top-0 z-50 h-16 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-xl">
+          <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-full flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/5 shadow-sm shadow-amber-500/10">
+                <Moon className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
               </div>
-              <div>
-                <h1 className="font-serif text-xl font-semibold tracking-tight leading-none">София</h1>
-                <p className="text-xs text-stone-400 mt-0.5">мудрая ведунья · @{botStatus?.username ?? 'oracultetris_bot'}</p>
+              <div className="leading-tight min-w-0">
+                <h1 className="text-sm font-semibold tracking-tight text-zinc-100">Sofia Bot Admin</h1>
+                <p className="text-[11px] text-zinc-500 font-mono truncate">
+                  @{botStatus?.username ?? 'oracultetris_bot'}
+                </p>
               </div>
             </div>
+
             <div className="flex items-center gap-2">
+              {/* Bot status pill (semantic) */}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Badge variant={botStatus?.ok ? 'default' : 'destructive'} className="gap-1.5 px-2.5 py-1 text-xs">
-                    {botStatus?.ok ? <CircleCheck className="w-3 h-3" /> : <CircleAlert className="w-3 h-3" />}
-                    {loading.bot ? '…' : botStatus?.ok ? `Онлайн · ${botStatus.ageSeconds ?? 0}s` : 'Оффлайн'}
-                  </Badge>
+                  <button
+                    className="hidden sm:flex items-center gap-2 h-8 px-3 rounded-md border border-zinc-800/70 bg-zinc-900/50 text-xs hover:border-zinc-700/80 active:translate-y-px transition-colors"
+                    type="button"
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                      }`}
+                    />
+                    <span className="text-zinc-300 font-mono tabular-nums">
+                      {loading.bot ? '...' : botStatus?.ok ? `${botStatus.ageSeconds ?? 0}s` : 'offline'}
+                    </span>
+                  </button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {botStatus?.lastHeartbeat ? `Heartbeat: ${new Date(botStatus.lastHeartbeat).toLocaleString('ru-RU')}` : 'Нет данных'}
+                  {botStatus?.lastHeartbeat
+                    ? `Heartbeat: ${new Date(botStatus.lastHeartbeat).toLocaleString('ru-RU')}`
+                    : 'Нет данных'}
                 </TooltipContent>
               </Tooltip>
+
+              {/* Refresh */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refreshCurrentTab}
+                className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/60 active:translate-y-px"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+                <span className="hidden sm:inline ml-1.5">Обновить</span>
+              </Button>
 
               {/* Export dropdown */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-stone-700 text-stone-300 hover:bg-stone-800 hover:text-amber-200">
-                    <Download className="w-3.5 h-3.5 mr-1.5" /> Экспорт
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/60 active:translate-y-px"
+                  >
+                    <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    <span className="hidden sm:inline ml-1.5">Экспорт</span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="bg-stone-900 border-stone-700">
-                  <DropdownMenuItem onClick={() => handleExport('users')} className="text-stone-200 focus:bg-stone-800 focus:text-amber-200">
-                    <FileDown className="w-3.5 h-3.5 mr-2" /> Пользователи CSV
+                <DropdownMenuContent className="bg-zinc-900 border-zinc-800" align="end">
+                  <DropdownMenuItem onClick={() => handleExport('users')} className="text-zinc-200 focus:bg-zinc-800 focus:text-amber-300">
+                    <FileDown className="w-3.5 h-3.5 mr-2" strokeWidth={1.5} /> Пользователи CSV
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleExport('readings')} className="text-stone-200 focus:bg-stone-800 focus:text-amber-200">
-                    <FileDown className="w-3.5 h-3.5 mr-2" /> Расклады CSV
+                  <DropdownMenuItem onClick={() => handleExport('readings')} className="text-zinc-200 focus:bg-zinc-800 focus:text-amber-300">
+                    <FileDown className="w-3.5 h-3.5 mr-2" strokeWidth={1.5} /> Расклады CSV
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleExport('transactions')} className="text-stone-200 focus:bg-stone-800 focus:text-amber-200">
-                    <FileDown className="w-3.5 h-3.5 mr-2" /> Транзакции CSV
+                  <DropdownMenuItem onClick={() => handleExport('transactions')} className="text-zinc-200 focus:bg-zinc-800 focus:text-amber-300">
+                    <FileDown className="w-3.5 h-3.5 mr-2" strokeWidth={1.5} /> Транзакции CSV
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <Button variant="outline" size="sm" onClick={() => { fetchStats(); fetchBotStatus(); fetchActivity(); }} className="border-stone-700 text-stone-300 hover:bg-stone-800 hover:text-amber-200">
-                <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading.stats || loading.bot ? 'animate-spin' : ''}`} /> Обновить
-              </Button>
-              <Button asChild size="sm" className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-md shadow-amber-900/30">
+              {/* Open bot */}
+              <Button asChild size="sm" className="h-8 bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px shadow-sm shadow-amber-500/20">
                 <a href="https://t.me/oracultetris_bot" target="_blank" rel="noreferrer">
-                  <Send className="w-3.5 h-3.5 mr-1.5" /> Открыть
+                  <Send className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  <span className="hidden sm:inline ml-1.5">Открыть</span>
                 </a>
               </Button>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 container mx-auto px-4 py-8 space-y-10">
-          {/* Hero / Landing */}
-          <section className="relative overflow-hidden rounded-3xl border border-amber-900/40 bg-gradient-to-br from-stone-900 via-stone-900 to-amber-950/40 p-8 md:p-12 sofia-fade-in">
-            <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-amber-700/10 blur-3xl sofia-spark" />
-            <div className="absolute -bottom-20 -left-20 w-56 h-56 rounded-full bg-emerald-800/10 blur-3xl" />
-            <div className="absolute top-1/3 right-1/4 w-1 h-1 rounded-full bg-amber-300 sofia-spark" />
-            <div className="absolute top-2/3 right-1/3 w-1 h-1 rounded-full bg-amber-200 sofia-spark" style={{ animationDelay: '0.7s' }} />
-            <div className="absolute top-1/4 right-1/2 w-1 h-1 rounded-full bg-amber-100 sofia-spark" style={{ animationDelay: '1.4s' }} />
-            <div className="relative max-w-3xl">
-              <Badge variant="outline" className="mb-4 border-amber-700/50 text-amber-300 bg-amber-950/40 backdrop-blur-sm">
-                <Moon className="w-3 h-3 mr-1.5" /> Telegram-бот · ИИ · Таро · Гороскопы · Двуязычный
-              </Badge>
-              <h2 className="font-serif text-4xl md:text-6xl font-bold leading-[1.05] mb-4 tracking-tight">
-                Приди ко мне, когда <span className="bg-gradient-to-r from-amber-300 via-amber-400 to-amber-500 bg-clip-text text-transparent">на душе тяжело</span>
-              </h2>
-              <p className="text-base md:text-lg text-stone-300 mb-7 leading-relaxed max-w-2xl">
-                Я — София, мудрая ведунья-хранительница. Помню тайгу и руки, что сушили травы, и одновременно —
-                слова складываются сами, как река. Карты, гороскопы, душевные разговоры. Я помню о тебе и встречаю теплом.
-              </p>
-              <div className="flex flex-wrap gap-3 mb-8">
-                <Button asChild size="lg" className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-lg shadow-amber-900/30">
-                  <a href="https://t.me/oracultetris_bot" target="_blank" rel="noreferrer">
-                    <Sparkles className="w-4 h-4 mr-2" /> Поговорить с Софией
-                  </a>
-                </Button>
-                <a href="#dashboard" className="inline-flex items-center justify-center rounded-md border border-amber-700/40 bg-amber-950/20 backdrop-blur-sm px-6 py-3 text-sm font-medium text-amber-200 hover:bg-amber-950/40 transition-colors">
-                  Админ-панель ↓
-                </a>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-xl">
-                {[
-                  { icon: ScrollText, label: '78 карт', sub: 'полная колода' },
-                  { icon: Heart, label: 'Память', sub: 'помнит о тебе' },
-                  { icon: Layers, label: '3 слоя', sub: 'личности' },
-                  { icon: Globe, label: '2 языка', sub: 'RU · EN' },
-                ].map((f, i) => (
-                  <div key={i} className="text-center rounded-lg p-2 bg-stone-900/40 border border-stone-800/60">
-                    <f.icon className="w-5 h-5 mx-auto text-amber-500 mb-1" />
-                    <div className="text-sm font-semibold">{f.label}</div>
-                    <div className="text-xs text-stone-500">{f.sub}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
+        {/* ─── Tab bar ─────────────────────────────────────────── */}
+        <div className="sticky top-16 z-40 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-xl">
+          <div className="max-w-[1400px] mx-auto px-4 md:px-8">
+            <nav
+              role="tablist"
+              aria-label="Разделы админ-панели"
+              className="flex items-center gap-1 overflow-x-auto sofia-scroll -mb-px"
+            >
+              {TABS.map((tab) => {
+                const isActive = activeTab === tab.value;
+                return (
+                  <button
+                    key={tab.value}
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => setActiveTab(tab.value)}
+                    className={`relative shrink-0 h-11 px-3.5 text-sm font-medium transition-colors active:translate-y-px ${
+                      isActive
+                        ? 'text-amber-400'
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {tab.label}
+                    {isActive && (
+                      <span
+                        aria-hidden
+                        className="absolute left-0 right-0 -bottom-px h-0.5 bg-amber-400 rounded-full"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        </div>
 
-          {/* Dashboard */}
-          <section id="dashboard" className="space-y-6">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h3 className="font-serif text-2xl font-semibold">Админ-панель</h3>
-                <p className="text-sm text-stone-400">Управление ботом, аналитика, расклады и рассылки</p>
-              </div>
-            </div>
+        {/* ─── Main content ────────────────────────────────────── */}
+        <main className="flex-1 max-w-[1400px] w-full mx-auto px-4 md:px-8 py-8 space-y-8">
+          {/* OVERVIEW */}
+          {activeTab === 'overview' && (
+            <TabTransition className="space-y-6">
+              <SectionHeader
+                title="Обзор"
+                description="Сводка по боту за последние 14 дней: активность, расклады, экономика, удержание."
+              />
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-              <TabsList className="bg-stone-900/80 border border-stone-800 backdrop-blur-sm p-1 h-auto flex flex-wrap gap-1">
-                {[
-                  { value: 'overview', icon: Activity, label: 'Обзор' },
-                  { value: 'users', icon: Users, label: 'Пользователи' },
-                  { value: 'readings', icon: Sparkles, label: 'Расклады' },
-                  { value: 'streaks', icon: Flame, label: 'Серии' },
-                  { value: 'economy', icon: Wallet, label: 'Экономика' },
-                  { value: 'digest', icon: Mail, label: 'Дайджест' },
-                  { value: 'broadcasts', icon: Send, label: 'Рассылки' },
-                  { value: 'settings', icon: Settings, label: 'Настройки' },
-                ].map((tab) => (
-                  <TabsTrigger key={tab.value} value={tab.value}
-                    className="transition-all duration-200 data-[state=active]:bg-amber-900/40 data-[state=active]:text-amber-200">
-                    <tab.icon className="w-3.5 h-3.5 mr-1.5" /> {tab.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-
-              {/* ─── Overview ──────────────────────────────────────── */}
-              <TabsContent value="overview" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <StatCard icon={Users} label="Пользователей" value={stats?.users.total} loading={loading.stats}
-                      accent="text-amber-400" sub={`${stats?.users.onboarded ?? 0} завершили онбординг`}
-                      spark={newUsersSpark} sparkColor="#f59e0b" />
-                    <StatCard icon={Activity} label="Активны 24ч" value={stats?.users.active24h} loading={loading.stats}
-                      accent="text-emerald-400" sub={`${stats?.funnel.retention7d ?? 0}% удержание 7д`}
-                      spark={msgSpark.slice(-7)} sparkColor="#10b981" />
-                    <StatCard icon={MessageCircle} label="Сообщений" value={stats?.activity.totalMessages} loading={loading.stats}
-                      accent="text-sky-300" sub="всего" spark={msgSpark} sparkColor="#7dd3fc" />
-                    <StatCard icon={Gem} label="💎 Потрачено" value={stats?.economy.crystalsSpent} loading={loading.stats}
-                      accent="text-amber-300" sub={`в обороте: ${stats?.economy.crystalsInCirculation ?? 0}`}
-                      spark={crystalsSpark} sparkColor="#fbbf24" />
-                  </div>
-
-                  <div className="grid lg:grid-cols-3 gap-4">
-                    {/* Funnel */}
-                    <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                      <CardHeader>
-                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                          <TrendingUp className="w-4 h-4 text-amber-400" /> Воронка
-                        </CardTitle>
-                        <CardDescription className="text-stone-400">Конверсия и удержание</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        <FunnelBar label="Всего пользователей" value={stats?.users.total ?? 0} max={stats?.users.total ?? 1} color="bg-stone-600" />
-                        <FunnelBar label="Завершили онбординг" value={stats?.users.onboarded ?? 0} max={stats?.users.total ?? 1} color="bg-amber-600" />
-                        <FunnelBar label="Активны 7 дней" value={stats?.users.active7d ?? 0} max={stats?.users.total ?? 1} color="bg-emerald-600" />
-                        <FunnelBar label="Активны 24 часа" value={stats?.users.active24h ?? 0} max={stats?.users.total ?? 1} color="bg-emerald-500" />
-                        <div className="pt-3 border-t border-stone-800 flex justify-between text-sm">
-                          <span className="text-stone-400">Конверсия онбординга</span>
-                          <span className="font-semibold text-amber-300 font-mono">{stats?.funnel.conversion ?? 0}%</span>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    {/* Zodiac wheel */}
-                    <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                      <CardHeader>
-                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                          <Star className="w-4 h-4 text-amber-400" /> Знаки зодиака
-                        </CardTitle>
-                        <CardDescription className="text-stone-400">Распределение по знакам</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex justify-center items-center py-2">
-                        <ZodiacWheel counts={zodiacCounts} size={220} />
-                      </CardContent>
-                    </Card>
-
-                    {/* Readings by type */}
-                    <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                      <CardHeader>
-                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-amber-400" /> Расклады по типам
-                        </CardTitle>
-                        <CardDescription className="text-stone-400">Что спрашивают чаще</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-2 max-h-64 overflow-y-auto sofia-scroll pr-1">
-                        {loading.stats && <Skeleton className="h-8 w-full" />}
-                        {stats?.readingsByType.length === 0 && !loading.stats && (
-                          <EmptyState icon="🔮" title="Пока никто не делал расклады" description="Поделитесь ботом, чтобы пользователи начали делать расклады" action="Поделиться ботом" onAction={() => window.open('https://t.me/oracultetris_bot', '_blank')} />
-                        )}
-                        {stats?.readingsByType.map((r) => {
-                          const max = stats.readingsByType[0]?.count ?? 1;
-                          const color = READING_COLORS[r.type] ?? '#f59e0b';
-                          return (
-                            <div key={r.type} className="space-y-1">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-stone-300 truncate">{READING_LABELS[r.type] ?? r.type}</span>
-                                <span className="font-mono text-stone-300">{r.count}</span>
-                              </div>
-                              <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
-                                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <StatCard icon={Sparkles} label="Раскладов всего" value={stats?.activity.totalReadings} loading={loading.stats} accent="text-amber-400" sub="" spark={readingsSpark} sparkColor="#f59e0b" />
-                    <StatCard icon={Send} label="Рассылок" value={stats?.activity.broadcasts} loading={loading.stats} accent="text-stone-300" sub="" />
-                    <StatCard icon={TrendingUp} label="Активны 7д" value={stats?.users.active7d} loading={loading.stats} accent="text-emerald-400" sub="" />
-                    <StatCard icon={CircleAlert} label="Заблокировано" value={stats?.users.blocked} loading={loading.stats} accent="text-rose-400" sub="" />
-                  </div>
-
-                  {/* Activity 14-day chart */}
-                  <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                    <CardHeader>
-                      <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-amber-400" /> Активность за 14 дней
-                      </CardTitle>
-                      <CardDescription className="text-stone-400">Сообщения и расклады по дням</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      {loading.activity ? (
-                        <Skeleton className="h-48 w-full" />
-                      ) : activity.length === 0 ? (
-                        <EmptyState icon="📊" title="Нет данных за выбранный период" description="Данные появятся, когда пользователи начнут активность" />
-                      ) : (
-                        <div className="space-y-3">
-                          <ActivityChart buckets={activity} />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  {/* Referral mini-board */}
-                  {referrals && referrals.leaderboard.length > 0 && (
-                    <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                      <CardHeader>
-                        <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                          <Gift className="w-4 h-4 text-amber-400" /> Топ рефералов
-                        </CardTitle>
-                        <CardDescription className="text-stone-400">
-                          Всего: {referrals.totals.totalReferrals} · 💎 начислено: {referrals.totals.crystalsAwarded}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                          {referrals.leaderboard.slice(0, 6).map((row) => (
-                            <div key={row.rank} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${row.rank === 1 ? 'bg-amber-600/30 text-amber-300' : row.rank === 2 ? 'bg-stone-500/30 text-stone-200' : row.rank === 3 ? 'bg-amber-900/30 text-amber-400' : 'bg-stone-800/50 text-stone-400'}`}>
-                                {row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : row.rank}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium truncate">
-                                  {row.referrer?.name ?? row.referrer?.firstName ?? '—'}
-                                </div>
-                                <div className="text-xs text-stone-500">
-                                  {row.referrals} {row.referrals === 1 ? 'приглашён' : 'приглашённых'}
-                                </div>
-                              </div>
-                              <Gift className="w-4 h-4 text-amber-500" />
-                            </div>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* ─── Users ──────────────────────────────────────────── */}
-              <TabsContent value="users" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                    <CardHeader>
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <div>
-                          <CardTitle className="text-stone-100 font-serif">Пользователи</CardTitle>
-                          <CardDescription className="text-stone-400">Всего: {usersTotal}</CardDescription>
-                        </div>
-                        <Input placeholder="Поиск по имени/username…" value={search} onChange={(e) => onSearch(e.target.value)}
-                          className="w-64 bg-stone-950 border-stone-700" />
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="rounded-md border border-stone-800 max-h-[28rem] overflow-y-auto sofia-scroll">
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-stone-900">
-                            <TableRow className="border-stone-800 hover:bg-stone-900">
-                              <TableHead className="text-stone-400">Имя</TableHead>
-                              <TableHead className="text-stone-400">Username</TableHead>
-                              <TableHead className="text-stone-400">Знак</TableHead>
-                              <TableHead className="text-stone-400 text-center">🌐</TableHead>
-                              <TableHead className="text-stone-400 text-right">💎</TableHead>
-                              <TableHead className="text-stone-400 text-right">Сообщ.</TableHead>
-                              <TableHead className="text-stone-400 text-right">🔥</TableHead>
-                              <TableHead className="text-stone-400">Статус</TableHead>
-                              <TableHead className="text-stone-400">Был в сети</TableHead>
-                              <TableHead className="text-stone-400 text-right">Действия</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {loading.users && Array.from({ length: 5 }).map((_, i) => (
-                              <TableRow key={i}><TableCell colSpan={10}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
-                            ))}
-                            {!loading.users && users.map((u) => (
-                              <TableRow key={u.id} className="border-stone-800 hover:bg-stone-900/60 transition-colors">
-                                <TableCell className="font-medium text-stone-100">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-stone-700 to-stone-900 flex items-center justify-center text-xs">
-                                      {(u.name ?? u.firstName ?? '?').slice(0, 1).toUpperCase()}
-                                    </div>
-                                    {u.name ?? u.firstName ?? '—'}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-stone-400">{u.username ? `@${u.username}` : '—'}</TableCell>
-                                <TableCell>{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : '—'}</TableCell>
-                                <TableCell className="text-center">
-                                  <Tooltip>
-                                    <TooltipTrigger>
-                                      <Badge variant="outline" className="text-xs border-stone-700 text-stone-400">
-                                        {u.language === 'en' ? '🇬🇧' : '🇷🇺'}
-                                      </Badge>
-                                    </TooltipTrigger>
-                                    <TooltipContent>{u.language === 'en' ? 'English' : 'Русский'}</TooltipContent>
-                                  </Tooltip>
-                                </TableCell>
-                                <TableCell className="text-right font-mono text-amber-300">{u.crystals}</TableCell>
-                                <TableCell className="text-right font-mono">{u.messageCount}</TableCell>
-                                <TableCell className="text-right font-mono">
-                                  {u.streakDays > 0 ? (
-                                    <span className="inline-flex items-center gap-0.5 text-orange-400">
-                                      <Flame className="w-3 h-3" /> {u.streakDays}
-                                    </span>
-                                  ) : '0'}
-                                </TableCell>
-                                <TableCell>
-                                  {u.isBlocked ? <Badge variant="destructive" className="text-xs">блок</Badge>
-                                    : u.onboardingCompleted ? <Badge className="text-xs bg-emerald-900/60">активен</Badge>
-                                    : <Badge variant="outline" className="text-xs border-stone-600 text-stone-400">{u.onboardingStep}</Badge>}
-                                  {u.isAdmin && <Badge className="text-xs ml-1 bg-amber-900/60">админ</Badge>}
-                                </TableCell>
-                                <TableCell className="text-stone-400 text-xs">{timeAgo(u.lastSeenAt)}</TableCell>
-                                <TableCell className="text-right">
-                                  <div className="flex items-center justify-end gap-1">
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button variant="ghost" size="icon" className="h-7 w-7 text-stone-400 hover:text-amber-300 hover:bg-stone-800"
-                                          onClick={() => window.open(`https://t.me/${u.username ?? u.telegramId}`, '_blank')}>
-                                          <ExternalLink className="w-3.5 h-3.5" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>Профиль</TooltipContent>
-                                    </Tooltip>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button variant="ghost" size="icon" className="h-7 w-7 text-stone-400 hover:text-amber-300 hover:bg-stone-800"
-                                          onClick={() => {
-                                            fetch('/api/settings', {
-                                              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({ key: `pending_gift_${u.telegramId}`, value: '5' }),
-                                            }).then(() => toast.success(`💎 5 кристаллов для ${(u.name ?? u.firstName ?? u.telegramId)}`));
-                                          }}>
-                                          <Gem className="w-3.5 h-3.5" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>Подарить 💎 +5</TooltipContent>
-                                    </Tooltip>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                            {!loading.users && users.length === 0 && (
-                              <TableRow><TableCell colSpan={10}>
-                                <EmptyState icon="👤" title="Пользователей пока нет" description="Поделитесь ссылкой на бота, чтобы привлечь первых пользователей" action="Поделиться ботом" onAction={() => window.open('https://t.me/oracultetris_bot', '_blank')} />
-                              </TableCell></TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </div>
-                      {usersTotalPages > 1 && (
-                        <div className="flex items-center justify-between mt-3">
-                          <Button variant="outline" size="sm" disabled={usersPage <= 1} onClick={() => fetchUsers(usersPage - 1, search)} className="border-stone-700 text-stone-300">← Назад</Button>
-                          <span className="text-sm text-stone-400">{usersPage} / {usersTotalPages}</span>
-                          <Button variant="outline" size="sm" disabled={usersPage >= usersTotalPages} onClick={() => fetchUsers(usersPage + 1, search)} className="border-stone-700 text-stone-300">Вперёд →</Button>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
-
-              {/* ─── Readings ───────────────────────────────────────── */}
-              <TabsContent value="readings" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                    <CardHeader>
-                      <CardTitle className="text-stone-100 font-serif">Последние расклады</CardTitle>
-                      <CardDescription className="text-stone-400">{readings.length} недавних</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-3 max-h-[36rem] overflow-y-auto sofia-scroll pr-1">
-                        {loading.readings && Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-                        {!loading.readings && readings.length === 0 && (
-                          <EmptyState icon="🔮" title="Пока никто не делал расклады" description="Откройте бота и сделайте первый расклад!" action="Открыть бота" onAction={() => window.open('https://t.me/oracultetris_bot', '_blank')} />
-                        )}
-                        {readings.map((r) => {
-                          const color = READING_COLORS[r.type] ?? '#f59e0b';
-                          const isExpanded = expandedReading === r.id;
-                          return (
-                            <Collapsible key={r.id} open={isExpanded} onOpenChange={(open) => setExpandedReading(open ? r.id : null)}>
-                              <div className={`rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-all ${isExpanded ? 'border-amber-800/50' : ''}`}>
-                                <div className="flex items-center justify-between mb-1.5 gap-2">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <div className="w-1 h-5 rounded-full" style={{ background: color }} />
-                                    <Badge variant="outline" className="border-stone-700 text-stone-300 text-xs">
-                                      {READING_LABELS[r.type] ?? r.type}
-                                    </Badge>
-                                    {r.cost > 0 && <Badge className="bg-amber-950/60 text-amber-300 text-xs">{r.cost} 💎</Badge>}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-stone-500 whitespace-nowrap">{timeAgo(r.createdAt)}</span>
-                                    <CollapsibleTrigger asChild>
-                                      <Button variant="ghost" size="icon" className="h-6 w-6 text-stone-500 hover:text-amber-300">
-                                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                                      </Button>
-                                    </CollapsibleTrigger>
-                                  </div>
-                                </div>
-                                <div className="text-xs text-stone-400 mb-1.5 flex items-center gap-1">
-                                  <Eye className="w-3 h-3" />
-                                  {r.user.name ?? r.user.firstName ?? '—'}
-                                  {r.user.zodiacSign ? ` · ${ZODIAC_EMOJI[r.user.zodiacSign] ?? ''} ${r.user.zodiacSign}` : ''}
-                                </div>
-                                <p className={`text-sm text-stone-300 leading-relaxed ${!isExpanded ? 'line-clamp-3' : ''}`}>
-                                  {r.interpretation}
-                                </p>
-                                <CollapsibleContent>
-                                  <div className="mt-3 pt-3 border-t border-stone-800">
-                                    <p className="text-xs text-stone-500 mb-1">Полная интерпретация:</p>
-                                    <p className="text-sm text-stone-300 leading-relaxed whitespace-pre-wrap">{r.interpretation}</p>
-                                    {r.question && (
-                                      <div className="mt-2">
-                                        <p className="text-xs text-stone-500 mb-1">Вопрос:</p>
-                                        <p className="text-sm text-stone-400 italic">{r.question}</p>
-                                      </div>
-                                    )}
-                                  </div>
-                                </CollapsibleContent>
-                              </div>
-                            </Collapsible>
-                          );
-                        })}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
-
-              {/* ─── Streaks ────────────────────────────────────────── */}
-              <TabsContent value="streaks" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  {!streaks ? (
-                    <Card className={CARD_BASE}>
-                      <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
-                    </Card>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <StatCard icon={Flame} label="Карта дня (7д)" value={streaks.cardOfDayActiveUsers} accent="text-orange-400" sub="активных" />
-                        <StatCard icon={Crown} label="Макс. серия" value={streaks.topStreaks[0]?.streakDays ?? 0} accent="text-amber-400" sub="дней подряд" />
-                        <StatCard icon={Users} label="С серией >0" value={streaks.distribution.filter((d) => d.bucket !== '0').reduce((a, b) => a + b.count, 0)} accent="text-emerald-400" sub="пользователей" />
-                        <StatCard icon={Calendar} label="DAU сегодня" value={streaks.dailyActive[streaks.dailyActive.length - 1]?.count ?? 0} accent="text-sky-300" sub="по lastActivityDay" />
-                      </div>
-
-                      <div className="grid lg:grid-cols-2 gap-4">
-                        <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                          <CardHeader>
-                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                              <Crown className="w-4 h-4 text-amber-400" /> Топ серий
-                            </CardTitle>
-                            <CardDescription className="text-stone-400">Самые преданные пользователи</CardDescription>
-                          </CardHeader>
-                          <CardContent className="space-y-2 max-h-72 overflow-y-auto sofia-scroll pr-1">
-                            {streaks.topStreaks.length === 0 && (
-                              <EmptyState icon="🔥" title="Пока никто не набрал серию" description="Серии появятся, когда пользователи начнут заходить каждый день" />
-                            )}
-                            {streaks.topStreaks.map((u, i) => (
-                              <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
-                                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${i === 0 ? 'bg-amber-600/30 text-amber-300' : i === 1 ? 'bg-stone-500/30 text-stone-200' : i === 2 ? 'bg-amber-900/30 text-amber-400' : 'bg-stone-800/50 text-stone-400'}`}>
-                                  {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-medium truncate">{u.name}</div>
-                                  <div className="text-xs text-stone-500">
-                                    {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-mono text-orange-400 text-lg flex items-center gap-1">
-                                    <Flame className="w-4 h-4" />{u.streakDays}
-                                  </div>
-                                  <div className="text-xs text-stone-500">{timeAgo(u.lastSeenAt)}</div>
-                                </div>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-
-                        <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                          <CardHeader>
-                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                              <Flame className="w-4 h-4 text-orange-400" /> Распределение серий
-                            </CardTitle>
-                            <CardDescription className="text-stone-400">Сколько пользователей в каждой категории</CardDescription>
-                          </CardHeader>
-                          <CardContent className="space-y-3">
-                            {streaks.distribution.map((d) => {
-                              const max = Math.max(...streaks.distribution.map((x) => x.count), 1);
-                              const pct = (d.count / max) * 100;
-                              const barColor = d.bucket === '0' ? 'bg-stone-600' : d.bucket === '1-3' ? 'bg-amber-700' : d.bucket === '4-7' ? 'bg-amber-600' : d.bucket === '8-14' ? 'bg-orange-600' : d.bucket === '15-30' ? 'bg-orange-500' : 'bg-red-500';
-                              return (
-                                <div key={d.bucket} className="space-y-1">
-                                  <div className="flex items-center justify-between text-xs">
-                                    <span className="text-stone-400">{d.bucket === '0' ? 'Без серии' : `${d.bucket} дн.`}</span>
-                                    <span className="font-mono text-stone-300">{d.count}</span>
-                                  </div>
-                                  <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
-                                    <div className={`h-full ${barColor} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                            <Calendar className="w-4 h-4 text-sky-400" /> DAU за 14 дней
-                          </CardTitle>
-                          <CardDescription className="text-stone-400">Daily Active Users по lastActivityDay</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex items-end gap-1 h-32">
-                            {streaks.dailyActive.map((d) => {
-                              const max = Math.max(...streaks.dailyActive.map((x) => x.count), 1);
-                              const h = (d.count / max) * 100;
-                              return (
-                                <Tooltip key={d.date}>
-                                  <TooltipTrigger asChild>
-                                    <div className="flex-1 group cursor-pointer">
-                                      <div
-                                        className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/70 group-hover:from-amber-800/60 group-hover:to-amber-400/90 group-hover:shadow-[0_0_8px_rgba(245,158,11,0.3)] transition-all"
-                                        style={{ height: `${Math.max(2, h)}%` }}
-                                      />
-                                    </div>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <div className="text-xs">
-                                      <div className="font-mono">{shortDate(d.date)}</div>
-                                      <div className="text-amber-300">{d.count} активных</div>
-                                    </div>
-                                  </TooltipContent>
-                                </Tooltip>
-                              );
-                            })}
-                          </div>
-                          <div className="flex justify-between mt-2 text-xs text-stone-500">
-                            <span>{shortDate(streaks.dailyActive[0]?.date ?? new Date().toISOString())}</span>
-                            <span>{shortDate(streaks.dailyActive[streaks.dailyActive.length - 1]?.date ?? new Date().toISOString())}</span>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* ─── Economy ────────────────────────────────────────── */}
-              <TabsContent value="economy" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  {!economy ? (
-                    <Card className={CARD_BASE}>
-                      <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
-                    </Card>
-                  ) : (
-                    <>
-                      {/* KPI Cards */}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <StatCard icon={CircleDollarSign} label="Всего потрачено" value={economy.summary.totalSpent} accent="text-rose-400" sub={`${economy.summary.totalSpentCount} транзакций`} />
-                        <StatCard icon={Wallet} label="В обороте" value={economy.summary.totalInCirculation} accent="text-amber-400" sub="кристаллов у пользователей" />
-                        <StatCard icon={DollarSign} label="Средний баланс" value={economy.summary.avgBalance} accent="text-emerald-400" sub="на пользователя" />
-                        <StatCard icon={UserPlus} label="С нулёвым балансом" value={economy.summary.zeroBalanceUsers} accent="text-stone-400" sub="пользователей" />
-                      </div>
-
-                      {/* Crystal Flow visualization */}
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                            <HandCoins className="w-4 h-4 text-amber-400" /> Поток кристаллов
-                          </CardTitle>
-                          <CardDescription className="text-stone-400">Начислено vs Потрачено</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-4">
-                              <span className="text-xs text-emerald-400 w-24 shrink-0">Начислено</span>
-                              <div className="flex-1 h-6 bg-stone-800 rounded-full overflow-hidden relative">
-                                <div className="h-full bg-gradient-to-r from-emerald-700 to-emerald-500 rounded-full transition-all duration-700 flex items-center justify-end pr-2"
-                                  style={{ width: `${economy.summary.totalAdded + economy.summary.totalSpent > 0 ? (economy.summary.totalAdded / (economy.summary.totalAdded + economy.summary.totalSpent)) * 100 : 50}%` }}>
-                                  <span className="text-xs font-mono text-emerald-100">{economy.summary.totalAdded.toLocaleString('ru-RU')}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <span className="text-xs text-rose-400 w-24 shrink-0">Потрачено</span>
-                              <div className="flex-1 h-6 bg-stone-800 rounded-full overflow-hidden relative">
-                                <div className="h-full bg-gradient-to-r from-rose-700 to-rose-500 rounded-full transition-all duration-700 flex items-center justify-end pr-2"
-                                  style={{ width: `${economy.summary.totalAdded + economy.summary.totalSpent > 0 ? (economy.summary.totalSpent / (economy.summary.totalAdded + economy.summary.totalSpent)) * 100 : 50}%` }}>
-                                  <span className="text-xs font-mono text-rose-100">{economy.summary.totalSpent.toLocaleString('ru-RU')}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Type breakdown */}
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                            <BadgePercent className="w-4 h-4 text-amber-400" /> Разбивка по типам
-                          </CardTitle>
-                          <CardDescription className="text-stone-400">Транзакции по категориям</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          {economy.typeBreakdown.map((tb) => {
-                            const maxTotal = Math.max(...economy.typeBreakdown.map((x) => Math.abs(x.total)), 1);
-                            const pct = (Math.abs(tb.total) / maxTotal) * 100;
-                            const barColor = TX_TYPE_BAR_COLORS[tb.type] ?? '#f59e0b';
-                            return (
-                              <div key={tb.type} className="space-y-1">
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="text-stone-300">{TX_TYPE_LABELS[tb.type] ?? tb.type}</span>
-                                  <span className="font-mono text-stone-300">{tb.count} · {tb.total.toLocaleString('ru-RU')} 💎</span>
-                                </div>
-                                <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
-                                  <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: barColor }} />
-                                </div>
-                              </div>
-                            );
-                          })}
-                          {economy.typeBreakdown.length === 0 && (
-                            <EmptyState icon="💰" title="Нет транзакций" description="Транзакции появятся, когда пользователи начнут тратить кристаллы" />
-                          )}
-                        </CardContent>
-                      </Card>
-
-                      {/* Transaction table */}
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <div>
-                              <CardTitle className="text-stone-100 font-serif">Транзакции</CardTitle>
-                              <CardDescription className="text-stone-400">Всего: {economy.total}</CardDescription>
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {['', 'spend', 'add', 'daily_bonus', 'referral', 'admin_gift'].map((t) => (
-                                <Button key={t} variant={ecoType === t ? 'default' : 'outline'} size="sm"
-                                  className={ecoType === t ? 'bg-amber-900/60 text-amber-200 border-amber-800/50' : 'border-stone-700 text-stone-400 hover:bg-stone-800 hover:text-stone-200'}
-                                  onClick={() => { setEcoType(t); setEcoPage(1); fetchEconomy(1, t); }}>
-                                  {t === '' ? 'Все' : (TX_TYPE_LABELS[t] ?? t)}
-                                </Button>
-                              ))}
-                            </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="rounded-md border border-stone-800 max-h-[24rem] overflow-y-auto sofia-scroll">
-                            <Table>
-                              <TableHeader className="sticky top-0 bg-stone-900">
-                                <TableRow className="border-stone-800 hover:bg-stone-900">
-                                  <TableHead className="text-stone-400">Пользователь</TableHead>
-                                  <TableHead className="text-stone-400">Тип</TableHead>
-                                  <TableHead className="text-stone-400 text-right">Сумма</TableHead>
-                                  <TableHead className="text-stone-400">Описание</TableHead>
-                                  <TableHead className="text-stone-400 text-right">Баланс после</TableHead>
-                                  <TableHead className="text-stone-400">Дата</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {loading.economy && Array.from({ length: 5 }).map((_, i) => (
-                                  <TableRow key={i}><TableCell colSpan={6}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
-                                ))}
-                                {!loading.economy && economy.transactions.map((tx) => (
-                                  <TableRow key={tx.id} className="border-stone-800 hover:bg-stone-900/60 transition-colors">
-                                    <TableCell className="text-stone-200 text-sm">
-                                      {tx.user.name ?? tx.user.firstName ?? tx.user.username ?? '—'}
-                                    </TableCell>
-                                    <TableCell>
-                                      <Badge variant="outline" className={`text-xs ${TX_TYPE_COLORS[tx.type] ?? 'border-stone-700 text-stone-300'}`}>
-                                        {TX_TYPE_LABELS[tx.type] ?? tx.type}
-                                      </Badge>
-                                    </TableCell>
-                                    <TableCell className={`text-right font-mono text-sm ${tx.amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                      {tx.amount >= 0 ? '+' : ''}{tx.amount}
-                                    </TableCell>
-                                    <TableCell className="text-stone-400 text-xs max-w-32 truncate">{tx.description ?? '—'}</TableCell>
-                                    <TableCell className="text-right font-mono text-stone-300 text-sm">{tx.balanceAfter ?? '—'}</TableCell>
-                                    <TableCell className="text-stone-500 text-xs whitespace-nowrap">{timeAgo(tx.createdAt)}</TableCell>
-                                  </TableRow>
-                                ))}
-                                {!loading.economy && economy.transactions.length === 0 && (
-                                  <TableRow><TableCell colSpan={6}>
-                                    <EmptyState icon="💰" title="Нет транзакций" description="Транзакции появятся при активности пользователей" />
-                                  </TableCell></TableRow>
-                                )}
-                              </TableBody>
-                            </Table>
-                          </div>
-                          {economy.totalPages > 1 && (
-                            <div className="flex items-center justify-between mt-3">
-                              <Button variant="outline" size="sm" disabled={ecoPage <= 1} onClick={() => { const p = ecoPage - 1; setEcoPage(p); fetchEconomy(p, ecoType); }} className="border-stone-700 text-stone-300">← Назад</Button>
-                              <span className="text-sm text-stone-400">{ecoPage} / {economy.totalPages}</span>
-                              <Button variant="outline" size="sm" disabled={ecoPage >= economy.totalPages} onClick={() => { const p = ecoPage + 1; setEcoPage(p); fetchEconomy(p, ecoType); }} className="border-stone-700 text-stone-300">Вперёд →</Button>
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    </>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* ─── Digest ─────────────────────────────────────────── */}
-              <TabsContent value="digest" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  {!digest ? (
-                    <Card className={CARD_BASE}>
-                      <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
-                    </Card>
-                  ) : (
-                    <>
-                      <Card className="bg-gradient-to-br from-stone-900 via-stone-900 to-amber-950/30 border-amber-900/40 backdrop-blur-sm">
-                        <CardHeader>
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <div>
-                              <CardTitle className="text-stone-100 font-serif flex items-center gap-2 text-xl">
-                                <Mail className="w-5 h-5 text-amber-400" /> Недельный дайджест
-                              </CardTitle>
-                              <CardDescription className="text-stone-400">
-                                {new Date(digest.weekRange.from).toLocaleDateString('ru-RU')} — {new Date(digest.weekRange.to).toLocaleDateString('ru-RU')}
-                              </CardDescription>
-                            </div>
-                            {digest.lastSentAt ? (
-                              <Badge variant="outline" className="border-emerald-700/50 text-emerald-300 bg-emerald-950/30">
-                                <Clock className="w-3 h-3 mr-1" /> Отправлен: {timeAgo(digest.lastSentAt)}
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="border-amber-700/50 text-amber-300 bg-amber-950/30">
-                                <Clock className="w-3 h-3 mr-1" /> Ещё не отправлялся на этой неделе
-                              </Badge>
-                            )}
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <p className="text-sm text-stone-300 leading-relaxed mb-4 italic font-serif">
-                            🌙 Каждый воскресенье София автоматически собирает недельную сводку и отправляет её всем админам.
-                            Ниже — превью того, что попадёт в следующий дайджест.
-                          </p>
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                            <DigestStat icon={Users} label="Новых" value={digest.stats.newUsers} color="text-amber-400" />
-                            <DigestStat icon={Activity} label="Активны 7д" value={digest.stats.active7d} color="text-emerald-400" />
-                            <DigestStat icon={MessageCircle} label="Сообщений" value={digest.stats.messages} color="text-sky-300" />
-                            <DigestStat icon={Sparkles} label="Раскладов" value={digest.stats.readings} color="text-amber-300" />
-                            <DigestStat icon={Gem} label="💎 Потрачено" value={digest.stats.crystalsSpent} color="text-amber-500" />
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <div className="grid lg:grid-cols-2 gap-4">
-                        <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                          <CardHeader>
-                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                              <Crown className="w-4 h-4 text-amber-400" /> Топ-5 за неделю
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {digest.topUsers.length === 0 && <EmptyState icon="👥" title="Нет активных пользователей" description="Активные пользователи появятся на следующей неделе" />}
-                            {digest.topUsers.map((u, i) => (
-                              <div key={u.id} className="flex items-center gap-3 p-2 rounded-lg bg-stone-950/50 border border-stone-800">
-                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-700/40 to-stone-800 flex items-center justify-center text-xs font-bold text-amber-300">
-                                  {i + 1}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-medium truncate">{u.name}</div>
-                                  <div className="text-xs text-stone-500">
-                                    {u.username ? `@${u.username} · ` : ''}{u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
-                                  </div>
-                                </div>
-                                <div className="text-right text-xs">
-                                  <div className="font-mono text-stone-200">{u.messageCount} сообщ.</div>
-                                  {u.streakDays > 0 && <div className="text-orange-400">🔥 {u.streakDays}</div>}
-                                </div>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-
-                        <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                          <CardHeader>
-                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                              <Sparkles className="w-4 h-4 text-amber-400" /> Расклады за неделю
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {digest.readingsByType.length === 0 && <EmptyState icon="🔮" title="Не было раскладов" description="На этой неделе не было раскладов" />}
-                            {digest.readingsByType.map((r) => {
-                              const max = digest.readingsByType[0]?.count ?? 1;
-                              const color = READING_COLORS[r.type] ?? '#f59e0b';
-                              return (
-                                <div key={r.type} className="space-y-1">
-                                  <div className="flex items-center justify-between text-xs">
-                                    <span className="text-stone-300">{READING_LABELS[r.type] ?? r.type}</span>
-                                    <span className="font-mono text-stone-300">{r.count}</span>
-                                  </div>
-                                  <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
-                                    <div className="h-full rounded-full" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      {digest.recentBroadcasts.length > 0 && (
-                        <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                          <CardHeader>
-                            <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                              <Send className="w-4 h-4 text-amber-400" /> Рассылки на этой неделе
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {digest.recentBroadcasts.map((b) => (
-                              <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3">
-                                <div className="flex items-center justify-between mb-1">
-                                  <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
-                                    {b.status === 'done' ? '✓ отправлено' : b.status}
-                                  </Badge>
-                                  <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
-                                </div>
-                                <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
-                                <p className="text-xs text-stone-500">Отправлено: {b.sentCount} / {b.total} · ошибок: {b.failedCount}</p>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-                      )}
-                    </>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* ─── Broadcasts ─────────────────────────────────────── */}
-              <TabsContent value="broadcasts" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                    <CardHeader>
-                      <CardTitle className="text-stone-100 font-serif">Новая рассылка</CardTitle>
-                      <CardDescription className="text-stone-400">Отправить сообщение всем пользователям</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <Textarea placeholder="Текст рассылки…" value={broadcastText} onChange={(e) => setBroadcastText(e.target.value)}
-                        rows={4} className="bg-stone-950 border-stone-700 resize-none" />
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <p className="text-xs text-stone-500">
-                          💡 Поддерживается HTML-форматирование. Рассылка отправится асинхронно — бот берёт её из БД каждые 8 секунд.
+              {/* Asymmetric bento grid - hero (4) + status (2) */}
+              <StaggerGroup className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                <StaggerItem className="md:col-span-4">
+                  <BentoTile className="h-full">
+                    <div className="flex items-start justify-between mb-5">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-1.5">
+                          Активные за 24 часа
                         </p>
-                        <Button onClick={sendBroadcast} disabled={sending} className="bg-gradient-to-br from-amber-600 to-amber-800 hover:from-amber-500 hover:to-amber-700 text-stone-50 shadow-md shadow-amber-900/30">
-                          <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} /> {sending ? 'Отправка…' : 'Отправить'}
-                        </Button>
+                        <div className="text-5xl font-mono tabular-nums font-semibold text-zinc-100 leading-none">
+                          {loading.stats ? (
+                            <Skeleton className="h-12 w-32" />
+                          ) : (
+                            <AnimatedNumber value={stats?.users.active24h ?? 0} />
+                          )}
+                        </div>
                       </div>
-                    </CardContent>
-                  </Card>
+                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                        <TrendingUp className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
+                        <span className="font-mono tabular-nums">
+                          {stats?.funnel.retention7d ?? 0}% удержание 7д
+                        </span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 pt-4 border-t border-zinc-800/70">
+                      <HeroStat label="Всего" value={stats?.users.total} loading={loading.stats} />
+                      <HeroStat label="Онбординг" value={stats?.users.onboarded} loading={loading.stats} />
+                      <HeroStat label="7 дней" value={stats?.users.active7d} loading={loading.stats} />
+                    </div>
+                  </BentoTile>
+                </StaggerItem>
 
-                  <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                    <CardHeader>
-                      <CardTitle className="text-stone-100 font-serif">История рассылок</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-2 max-h-64 overflow-y-auto sofia-scroll pr-1">
-                        {loading.broadcasts && <Skeleton className="h-16 w-full" />}
-                        {!loading.broadcasts && broadcasts.length === 0 && (
-                          <EmptyState icon="📨" title="Рассылок пока не было" description="Создайте первую рассылку, чтобы уведомить пользователей" />
-                        )}
-                        {broadcasts.map((b) => (
-                          <div key={b.id} className="rounded-lg border border-stone-800 bg-stone-950/50 p-3 hover:border-stone-700 transition-colors">
-                            <div className="flex items-center justify-between mb-1">
-                              <Badge variant={b.status === 'done' ? 'default' : 'outline'} className="text-xs">
-                                {b.status === 'done' ? '✓ отправлено' : b.status}
-                              </Badge>
-                              <span className="text-xs text-stone-500">{timeAgo(b.createdAt)}</span>
+                <StaggerItem className="md:col-span-2">
+                  <BentoTile className="h-full flex flex-col">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-3">
+                      Бот
+                    </p>
+                    <div className="flex items-center gap-3 mb-3">
+                      <span
+                        className={`flex h-2.5 w-2.5 rounded-full ${
+                          botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                        }`}
+                      />
+                      <span className="text-lg font-semibold text-zinc-100">
+                        {loading.bot ? '...' : botStatus?.ok ? 'Онлайн' : 'Оффлайн'}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 text-xs font-mono tabular-nums text-zinc-400">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Аптайм</span>
+                        <span>{botStatus?.ageSeconds ?? 0}s</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Хартбит</span>
+                        <span className="truncate ml-2 max-w-[10ch]">
+                          {botStatus?.lastHeartbeat ? timeAgo(botStatus.lastHeartbeat) : 'нет'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Заблок.</span>
+                        <span>{stats?.users.blocked ?? 0}</span>
+                      </div>
+                    </div>
+                    <div className="mt-auto pt-4">
+                      <a
+                        href="https://t.me/oracultetris_bot"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400 hover:text-amber-300 active:translate-y-px transition"
+                      >
+                        Открыть в Telegram
+                        <ArrowUpRight className="w-3 h-3" strokeWidth={1.5} />
+                      </a>
+                    </div>
+                  </BentoTile>
+                </StaggerItem>
+              </StaggerGroup>
+
+              {/* Metric row - asymmetric: 4 + 2 */}
+              <StaggerGroup className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                <StaggerItem className="md:col-span-4">
+                  <MetricTile
+                    label="Сообщений всего"
+                    value={stats?.activity.totalMessages}
+                    loading={loading.stats}
+                    icon={MessageCircle}
+                    spark={msgSpark}
+                    sparkColor="#fbbf24"
+                    sub={
+                      <span className="font-mono tabular-nums">
+                        раскладов: {fmtNum(stats?.activity.totalReadings ?? 0)} · рассылок: {fmtNum(stats?.activity.broadcasts ?? 0)}
+                      </span>
+                    }
+                  />
+                </StaggerItem>
+                <StaggerItem className="md:col-span-2">
+                  <MetricTile
+                    label="Кристаллов потрачено"
+                    value={stats?.economy.crystalsSpent}
+                    loading={loading.stats}
+                    icon={Gem}
+                    spark={crystalsSpark}
+                    sparkColor="#f59e0b"
+                    sub={<span className="font-mono tabular-nums">в обороте: {fmtNum(stats?.economy.crystalsInCirculation ?? 0)}</span>}
+                  />
+                </StaggerItem>
+              </StaggerGroup>
+
+              {/* Activity chart (4) + readings by type (2) */}
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                <BentoTile className="md:col-span-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100">Активность за 14 дней</h3>
+                      <p className="text-xs text-zinc-500 mt-0.5">Сообщения и расклады по дням</p>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-zinc-500">
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Сообщения
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500/40" /> Расклады
+                      </span>
+                    </div>
+                  </div>
+                  {loading.activity ? (
+                    <Skeleton className="h-40 w-full" />
+                  ) : activity.length === 0 ? (
+                    <EmptyState
+                      icon={Activity}
+                      title="Нет данных за период"
+                      description="Данные появятся, когда пользователи начнут активность"
+                    />
+                  ) : (
+                    <ActivityChart buckets={activity} />
+                  )}
+                </BentoTile>
+
+                <BentoTile className="md:col-span-2">
+                  <h3 className="text-sm font-semibold text-zinc-100 mb-1">Расклады по типам</h3>
+                  <p className="text-xs text-zinc-500 mb-4">Что спрашивают чаще</p>
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto sofia-scroll pr-1">
+                    {loading.stats && Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-6 w-full" />
+                    ))}
+                    {stats?.readingsByType.length === 0 && !loading.stats && (
+                      <EmptyState
+                        icon={Sparkles}
+                        title="Пока нет раскладов"
+                        description="Поделитесь ботом, чтобы пользователи начали расклады"
+                      />
+                    )}
+                    {stats?.readingsByType.map((r) => {
+                      const max = stats.readingsByType[0]?.count ?? 1;
+                      return (
+                        <MiniBar
+                          key={r.type}
+                          label={READING_LABELS[r.type] ?? r.type}
+                          value={r.count}
+                          max={max}
+                          display={fmtNum(r.count)}
+                          color={READING_BAR_COLOR[r.type] ?? 'bg-amber-500/70'}
+                        />
+                      );
+                    })}
+                  </div>
+                </BentoTile>
+              </div>
+
+              {/* Funnel (2) + Zodiac (4) - asymmetric */}
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                <BentoTile className="md:col-span-2">
+                  <h3 className="text-sm font-semibold text-zinc-100 mb-1">Воронка</h3>
+                  <p className="text-xs text-zinc-500 mb-4">Конверсия и удержание</p>
+                  <div className="space-y-3">
+                    <FunnelBar label="Всего" value={stats?.users.total ?? 0} max={stats?.users.total ?? 1} color="bg-zinc-600" />
+                    <FunnelBar label="Онбординг" value={stats?.users.onboarded ?? 0} max={stats?.users.total ?? 1} color="bg-amber-600" />
+                    <FunnelBar label="7 дней" value={stats?.users.active7d ?? 0} max={stats?.users.total ?? 1} color="bg-amber-500" />
+                    <FunnelBar label="24 часа" value={stats?.users.active24h ?? 0} max={stats?.users.total ?? 1} color="bg-amber-400" />
+                    <div className="pt-3 mt-1 border-t border-zinc-800/70 flex justify-between text-xs">
+                      <span className="text-zinc-400">Конверсия</span>
+                      <span className="font-mono tabular-nums text-amber-400">
+                        {stats?.funnel.conversion ?? 0}%
+                      </span>
+                    </div>
+                  </div>
+                </BentoTile>
+
+                <BentoTile className="md:col-span-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100">Знаки зодиака</h3>
+                      <p className="text-xs text-zinc-500 mt-0.5">Распределение подписчиков по знакам</p>
+                    </div>
+                    <Star className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 items-center">
+                    <div className="flex justify-center items-center py-1">
+                      <ZodiacWheel counts={zodiacCounts} size={200} />
+                    </div>
+                    <ZodiacBreakdown counts={zodiacCounts} />
+                  </div>
+                </BentoTile>
+              </div>
+
+              {/* Top referrals - full width */}
+              <BentoTile>
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-100">Топ рефералов</h3>
+                    <p className="text-xs text-zinc-500 mt-0.5 font-mono tabular-nums">
+                      всего: {referrals?.totals.totalReferrals ?? 0} · вознаграждено: {referrals?.totals.rewardedReferrals ?? 0} · кристаллов начислено: {referrals?.totals.crystalsAwarded ?? 0}
+                    </p>
+                  </div>
+                  <Gift className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                  {loading.referrals && Array.from({ length: 6 }).map((_, i) => (
+                    <Skeleton key={i} className="h-9 w-full" />
+                  ))}
+                  {!loading.referrals && referrals?.leaderboard.length === 0 && (
+                    <div className="col-span-full">
+                      <EmptyState
+                        icon={Gift}
+                        title="Рефералов пока нет"
+                        description="Появятся, когда пользователи начнут приглашать друзей"
+                      />
+                    </div>
+                  )}
+                  {referrals?.leaderboard.slice(0, 6).map((row) => (
+                    <div
+                      key={row.rank}
+                      className="flex items-center gap-3 px-2.5 py-2 rounded-md border border-zinc-800/60 hover:border-zinc-700/80 hover:bg-zinc-900/40 transition-colors"
+                    >
+                      <span className="text-xs font-mono tabular-nums text-zinc-500 w-6">
+                        {String(row.rank).padStart(2, '0')}
+                      </span>
+                      <span className="flex-1 text-sm text-zinc-200 truncate">
+                        {row.referrer?.name ?? row.referrer?.firstName ?? 'Аноним'}
+                      </span>
+                      <span className="text-xs font-mono tabular-nums text-amber-400">
+                        {row.referrals}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </BentoTile>
+            </TabTransition>
+          )}
+
+          {/* USERS */}
+          {activeTab === 'users' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Пользователи"
+                description="База подписчиков бота. Поиск, экспорт, профиль в Telegram, быстрое начисление кристаллов."
+                right={
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+                    <Input
+                      placeholder="Поиск по имени или username"
+                      value={search}
+                      onChange={(e) => onSearch(e.target.value)}
+                      className="pl-8 w-64 h-8 bg-zinc-900/50 border-zinc-800/70 text-sm placeholder:text-zinc-600"
+                    />
+                  </div>
+                }
+              />
+
+              <div className="text-xs uppercase tracking-wider text-zinc-500 font-mono">
+                Всего записей: {fmtNum(usersTotal)}
+              </div>
+
+              {/* Hairline table - no boxed card around it */}
+              <div className="rounded-lg border border-zinc-800/60 overflow-hidden">
+                <div className="max-h-[32rem] overflow-y-auto sofia-scroll">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-zinc-950/95 backdrop-blur-sm z-10">
+                      <TableRow className="border-zinc-800/60 hover:bg-transparent">
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Имя</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Username</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Знак</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-center">Язык</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Кристаллы</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Сообщ.</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Серия</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Статус</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Был в сети</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Действия</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {loading.users && Array.from({ length: 6 }).map((_, i) => (
+                        <TableRow key={i} className="border-zinc-800/60">
+                          {Array.from({ length: 10 }).map((__, j) => (
+                            <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                      {!loading.users && users.map((u) => (
+                        <TableRow key={u.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                          <TableCell className="font-medium text-zinc-100">
+                            <div className="flex items-center gap-2.5">
+                              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800/80 text-[10px] font-mono text-zinc-400">
+                                {(u.name ?? u.firstName ?? '?').slice(0, 1).toUpperCase()}
+                              </div>
+                              <span className="truncate">{u.name ?? u.firstName ?? '-'}</span>
                             </div>
-                            <p className="text-sm text-stone-300 line-clamp-2 mb-1">{b.text}</p>
-                            <div className="flex items-center gap-3 text-xs text-stone-500">
-                              <span>Отправлено: {b.sentCount} / {b.total}</span>
-                              {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+                          </TableCell>
+                          <TableCell className="text-zinc-400 font-mono text-xs">
+                            {u.username ? `@${u.username}` : '-'}
+                          </TableCell>
+                          <TableCell className="text-zinc-300 text-xs">
+                            {u.zodiacSign ? `${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : '-'}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <span className="text-xs text-zinc-500 font-mono">{u.language === 'en' ? 'EN' : 'RU'}</span>
+                          </TableCell>
+                          <TableCell className="text-right font-mono tabular-nums text-amber-400">{u.crystals}</TableCell>
+                          <TableCell className="text-right font-mono tabular-nums text-zinc-300">{u.messageCount}</TableCell>
+                          <TableCell className="text-right font-mono tabular-nums">
+                            {u.streakDays > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-amber-400">
+                                <Flame className="w-3 h-3" strokeWidth={1.5} />
+                                {u.streakDays}
+                              </span>
+                            ) : <span className="text-zinc-600">0</span>}
+                          </TableCell>
+                          <TableCell>
+                            {u.isBlocked ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-rose-400">
+                                <span className="h-1 w-1 rounded-full bg-rose-400" /> блок
+                              </span>
+                            ) : u.onboardingCompleted ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-zinc-300">
+                                <span className="h-1 w-1 rounded-full bg-amber-400" /> активен
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-zinc-500 font-mono">{u.onboardingStep}</span>
+                            )}
+                            {u.isAdmin && (
+                              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">admin</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-zinc-500 text-xs font-mono tabular-nums">{timeAgo(u.lastSeenAt)}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800/60 active:translate-y-px"
+                                    onClick={() => window.open(`https://t.me/${u.username ?? u.telegramId}`, '_blank')}
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Профиль в Telegram</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800/60 active:translate-y-px"
+                                    onClick={() => {
+                                      fetch('/api/settings', {
+                                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ key: `pending_gift_${u.telegramId}`, value: '5' }),
+                                      }).then(() => toast.success(`+5 кристаллов для ${u.name ?? u.firstName ?? u.telegramId}`));
+                                    }}
+                                  >
+                                    <Gem className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Подарить +5 кристаллов</TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {!loading.users && users.length === 0 && (
+                        <TableRow className="border-zinc-800/60">
+                          <TableCell colSpan={10}>
+                            <EmptyState
+                              icon={Users}
+                              title="Пользователей пока нет"
+                              description="Поделитесь ссылкой на бота, чтобы привлечь первых подписчиков"
+                              action="Открыть бота"
+                              onAction={() => window.open('https://t.me/oracultetris_bot', '_blank')}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              {usersTotalPages > 1 && (
+                <div className="flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={usersPage <= 1}
+                    onClick={() => fetchUsers(usersPage - 1, search)}
+                    className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 active:translate-y-px disabled:opacity-40"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} /> Назад
+                  </Button>
+                  <span className="text-xs text-zinc-500 font-mono tabular-nums">
+                    {usersPage} / {usersTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={usersPage >= usersTotalPages}
+                    onClick={() => fetchUsers(usersPage + 1, search)}
+                    className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 active:translate-y-px disabled:opacity-40"
+                  >
+                    Вперёд <ArrowRight className="w-3.5 h-3.5 ml-1.5" strokeWidth={1.5} />
+                  </Button>
+                </div>
+              )}
+            </TabTransition>
+          )}
+
+          {/* READINGS */}
+          {activeTab === 'readings' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Расклады"
+                description="Последние 20 раскладов Таро. Раскройте карточку, чтобы увидеть полный текст интерпретации."
+                right={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport('readings')}
+                    className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400 active:translate-y-px"
+                  >
+                    <FileDown className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} /> CSV
+                  </Button>
+                }
+              />
+
+              <div className="text-xs uppercase tracking-wider text-zinc-500 font-mono">
+                Записей: {fmtNum(readings.length)}
+              </div>
+
+              <div className="space-y-2">
+                {loading.readings && Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                ))}
+                {!loading.readings && readings.length === 0 && (
+                  <BentoTile interactive={false} className="py-12">
+                    <EmptyState
+                      icon={Sparkles}
+                      title="Пока никто не делал расклады"
+                      description="Откройте бота и сделайте первый расклад"
+                      action="Открыть бота"
+                      onAction={() => window.open('https://t.me/oracultetris_bot', '_blank')}
+                    />
+                  </BentoTile>
+                )}
+                {readings.map((r) => {
+                  const stripeColor = READING_STRIPE[r.type] ?? 'bg-amber-500';
+                  const isExpanded = expandedReading === r.id;
+                  return (
+                    <Collapsible key={r.id} open={isExpanded} onOpenChange={(open) => setExpandedReading(open ? r.id : null)}>
+                      <div
+                        className={`rounded-lg border bg-zinc-900/40 transition-colors ${
+                          isExpanded ? 'border-amber-500/40' : 'border-zinc-800/60 hover:border-zinc-700/80'
+                        }`}
+                      >
+                        <div className="flex items-stretch">
+                          <div className={`w-1 shrink-0 ${stripeColor} rounded-l-lg`} />
+                          <div className="flex-1 p-3.5 min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Badge variant="outline" className="border-zinc-700/70 text-zinc-300 text-[11px] font-medium">
+                                  {READING_LABELS[r.type] ?? r.type}
+                                </Badge>
+                                {r.cost > 0 && (
+                                  <span className="text-[11px] font-mono tabular-nums text-amber-400 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                                    {r.cost} 💎
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{timeAgo(r.createdAt)}</span>
+                                <CollapsibleTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800/60 active:translate-y-px">
+                                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5" strokeWidth={1.5} /> : <ChevronDown className="w-3.5 h-3.5" strokeWidth={1.5} />}
+                                  </Button>
+                                </CollapsibleTrigger>
+                              </div>
+                            </div>
+                            <div className="text-[11px] text-zinc-500 mb-2 flex items-center gap-1.5 font-mono">
+                              <Eye className="w-3 h-3" strokeWidth={1.5} />
+                              {r.user.name ?? r.user.firstName ?? '-'}
+                              {r.user.zodiacSign ? ` · ${ZODIAC_EMOJI[r.user.zodiacSign] ?? ''} ${r.user.zodiacSign}` : ''}
+                            </div>
+                            <p className={`text-sm text-zinc-300 leading-relaxed ${!isExpanded ? 'line-clamp-2' : ''}`}>
+                              {r.interpretation}
+                            </p>
+                            <CollapsibleContent>
+                              <div className="mt-3 pt-3 border-t border-zinc-800/70 space-y-3">
+                                {r.question && (
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Вопрос</p>
+                                    <p className="text-sm text-zinc-400 italic">{r.question}</p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Полная интерпретация</p>
+                                  <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{r.interpretation}</p>
+                                </div>
+                              </div>
+                            </CollapsibleContent>
+                          </div>
+                        </div>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
+              </div>
+            </TabTransition>
+          )}
+
+          {/* STREAKS */}
+          {activeTab === 'streaks' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Серии"
+                description="Ежедневная активность пользователей и распределение по длине серии."
+              />
+
+              {!streaks ? (
+                <BentoTile interactive={false}><Skeleton className="h-64 w-full" /></BentoTile>
+              ) : (
+                <>
+                  <StaggerGroup className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <StaggerItem>
+                      <MetricTile label="Карта дня (7д)" value={streaks.cardOfDayActiveUsers} icon={Flame} accent="text-amber-400" sub="активных" />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="Максимальная серия"
+                        value={streaks.topStreaks[0]?.streakDays ?? 0}
+                        icon={Crown}
+                        accent="text-amber-400"
+                        sub="дней подряд"
+                      />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="С серией > 0"
+                        value={streaks.distribution.filter((d) => d.bucket !== '0').reduce((a, b) => a + b.count, 0)}
+                        icon={Users}
+                        accent="text-amber-400"
+                        sub="пользователей"
+                      />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="DAU сегодня"
+                        value={streaks.dailyActive[streaks.dailyActive.length - 1]?.count ?? 0}
+                        icon={Calendar}
+                        accent="text-amber-400"
+                        sub="по lastActivityDay"
+                      />
+                    </StaggerItem>
+                  </StaggerGroup>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Crown className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Топ серий</h3>
+                      </div>
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto sofia-scroll pr-1">
+                        {streaks.topStreaks.length === 0 && (
+                          <EmptyState icon={Flame} title="Серий пока нет" description="Появятся, когда пользователи начнут заходить каждый день" />
+                        )}
+                        {streaks.topStreaks.map((u, i) => (
+                          <div key={u.id} className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-zinc-900/60 transition-colors">
+                            <span className={`text-xs font-mono tabular-nums w-6 ${i < 3 ? 'text-amber-400' : 'text-zinc-500'}`}>
+                              {String(i + 1).padStart(2, '0')}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-zinc-200 truncate">{u.name}</div>
+                              <div className="text-[11px] text-zinc-500 font-mono truncate">
+                                {u.username ? `@${u.username}` : ''}{u.zodiacSign ? ` · ${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-mono tabular-nums text-amber-400 flex items-center gap-1 justify-end">
+                                <Flame className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                {u.streakDays}
+                              </div>
+                              <div className="text-[11px] text-zinc-500 font-mono">{timeAgo(u.lastSeenAt)}</div>
                             </div>
                           </div>
                         ))}
                       </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
+                    </BentoTile>
 
-              {/* ─── Settings ───────────────────────────────────────── */}
-              <TabsContent value="settings" className="space-y-4">
-                <div className="sofia-fade-in space-y-4">
-                  {!settingsData ? (
-                    <Card className={CARD_BASE}>
-                      <CardContent className="p-6"><Skeleton className="h-64 w-full" /></CardContent>
-                    </Card>
-                  ) : (
-                    <>
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                            <Settings className="w-4 h-4 text-amber-400" /> Конфигурация бота
-                          </CardTitle>
-                          <CardDescription className="text-stone-400">Редактирование настроек · {settingsData.settings.length} параметров</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-3 max-h-[32rem] overflow-y-auto sofia-scroll pr-1">
-                            {settingsData.settings.map((s) => {
-                              const isModified = editValues[s.key] !== s.value;
-                              const isSaving = savingSettings[s.key] ?? false;
-                              const isSaved = savedSettings[s.key] ?? false;
-                              return (
-                                <div key={s.id} className={`rounded-lg border bg-stone-950/50 p-3 transition-all ${isModified ? 'border-amber-800/50 sofia-border-glow' : 'border-stone-800'}`}>
-                                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2 mb-1">
-                                        <code className="text-xs font-mono text-amber-300 bg-amber-950/30 px-1.5 py-0.5 rounded">{s.key}</code>
-                                        {isModified && <Badge variant="outline" className="text-xs border-amber-700/50 text-amber-300 bg-amber-950/30">изменён</Badge>}
-                                        {isSaved && <Badge className="text-xs bg-emerald-900/60 text-emerald-300"><Check className="w-3 h-3 mr-1" />Сохранено</Badge>}
-                                      </div>
-                                      <div className="text-xs text-stone-500 flex items-center gap-1">
-                                        <Clock className="w-3 h-3" /> Обновлено: {timeAgo(s.updatedAt)}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <Input
-                                        value={editValues[s.key] ?? s.value}
-                                        onChange={(e) => setEditValues((v) => ({ ...v, [s.key]: e.target.value }))}
-                                        className="w-48 bg-stone-950 border-stone-700 text-sm font-mono"
-                                      />
-                                      <Button size="sm" disabled={!isModified || isSaving}
-                                        onClick={() => saveSetting(s.key)}
-                                        className="bg-amber-900/60 text-amber-200 hover:bg-amber-800/80 disabled:opacity-40">
-                                        {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                            {settingsData.settings.length === 0 && (
-                              <EmptyState icon="⚙️" title="Настроек пока нет" description="Настройки появятся после первого запуска бота" />
-                            )}
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Flame className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Распределение серий</h3>
+                      </div>
+                      <div className="space-y-3">
+                        {streaks.distribution.map((d) => {
+                          const max = Math.max(...streaks.distribution.map((x) => x.count), 1);
+                          return (
+                            <MiniBar
+                              key={d.bucket}
+                              label={d.bucket === '0' ? 'Без серии' : `${d.bucket} дн.`}
+                              value={d.count}
+                              max={max}
+                              display={fmtNum(d.count)}
+                              color={
+                                d.bucket === '0' ? 'bg-zinc-600' :
+                                d.bucket === '1-3' ? 'bg-amber-700' :
+                                d.bucket === '4-7' ? 'bg-amber-600' :
+                                d.bucket === '8-14' ? 'bg-amber-500' :
+                                d.bucket === '15-30' ? 'bg-amber-400' :
+                                'bg-amber-300'
+                              }
+                              muted={d.bucket === '0'}
+                            />
+                          );
+                        })}
+                      </div>
+                    </BentoTile>
+                  </div>
+
+                  <BentoTile>
+                    <div className="flex items-center gap-2 mb-4">
+                      <Calendar className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                      <h3 className="text-sm font-semibold text-zinc-100">DAU за 14 дней</h3>
+                    </div>
+                    <div className="flex items-end gap-1 h-32">
+                      {streaks.dailyActive.map((d) => {
+                        const max = Math.max(...streaks.dailyActive.map((x) => x.count), 1);
+                        const h = (d.count / max) * 100;
+                        return (
+                          <Tooltip key={d.date}>
+                            <TooltipTrigger asChild>
+                              <div className="flex-1 group cursor-pointer">
+                                <div
+                                  className="w-full rounded-t bg-amber-500/70 group-hover:bg-amber-400 transition-colors"
+                                  style={{ height: `${Math.max(2, h)}%` }}
+                                />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <div className="text-xs font-mono tabular-nums">
+                                <div>{shortDate(d.date)}</div>
+                                <div className="text-amber-300">{d.count} активных</div>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between mt-3 text-[11px] text-zinc-500 font-mono tabular-nums">
+                      <span>{shortDate(streaks.dailyActive[0]?.date ?? new Date().toISOString())}</span>
+                      <span>{shortDate(streaks.dailyActive[streaks.dailyActive.length - 1]?.date ?? new Date().toISOString())}</span>
+                    </div>
+                  </BentoTile>
+                </>
+              )}
+            </TabTransition>
+          )}
+
+          {/* ECONOMY */}
+          {activeTab === 'economy' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Экономика"
+                description="Поток кристаллов: начисления, траты, оборот и история транзакций."
+              />
+
+              {!economy ? (
+                <BentoTile interactive={false}><Skeleton className="h-64 w-full" /></BentoTile>
+              ) : (
+                <>
+                  <StaggerGroup className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <StaggerItem>
+                      <MetricTile
+                        label="Потрачено всего"
+                        value={economy.summary.totalSpent}
+                        icon={ArrowUpRight}
+                        accent="text-amber-400"
+                        sub={<span className="font-mono tabular-nums">{fmtNum(economy.summary.totalSpentCount)} транзакций</span>}
+                      />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="В обороте"
+                        value={economy.summary.totalInCirculation}
+                        icon={Wallet}
+                        accent="text-amber-400"
+                        sub="у пользователей"
+                      />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="Средний баланс"
+                        value={economy.summary.avgBalance}
+                        icon={TrendingUp}
+                        accent="text-amber-400"
+                        sub="на пользователя"
+                      />
+                    </StaggerItem>
+                    <StaggerItem>
+                      <MetricTile
+                        label="С нулевым балансом"
+                        value={economy.summary.zeroBalanceUsers}
+                        icon={UserPlus}
+                        accent="text-zinc-400"
+                        sub="пользователей"
+                      />
+                    </StaggerItem>
+                  </StaggerGroup>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <HandCoins className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Поток кристаллов</h3>
+                      </div>
+                      <div className="space-y-4">
+                        <FlowBar
+                          label="Начислено"
+                          value={economy.summary.totalAdded}
+                          total={economy.summary.totalAdded + economy.summary.totalSpent}
+                          color="bg-amber-500"
+                        />
+                        <FlowBar
+                          label="Потрачено"
+                          value={economy.summary.totalSpent}
+                          total={economy.summary.totalAdded + economy.summary.totalSpent}
+                          color="bg-zinc-600"
+                        />
+                      </div>
+                      <Hairline className="my-4" />
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <div className="text-zinc-500 mb-0.5">Ежедневный бонус</div>
+                          <div className="font-mono tabular-nums text-amber-400">
+                            {fmtNum(economy.summary.totalDailyBonus)} ({economy.summary.totalDailyBonusCount})
                           </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Quick Actions */}
-                      <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-                        <CardHeader>
-                          <CardTitle className="text-stone-100 font-serif flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-amber-400" /> Быстрые действия
-                          </CardTitle>
-                          <CardDescription className="text-stone-400">Массовые операции с подтверждением</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex flex-wrap gap-3">
-                            <Button variant="outline" className="border-amber-800/50 text-amber-300 hover:bg-amber-950/40"
-                              onClick={() => setGiftDialogOpen(true)}>
-                              <Gift className="w-4 h-4 mr-2" /> Начислить всем
-                            </Button>
-                            <Button variant="outline" className="border-rose-800/50 text-rose-300 hover:bg-rose-950/40"
-                              onClick={() => setResetDialogOpen(true)}>
-                              <RotateCcw className="w-4 h-4 mr-2" /> Сбросить серии
-                            </Button>
+                        </div>
+                        <div>
+                          <div className="text-zinc-500 mb-0.5">Рефералы</div>
+                          <div className="font-mono tabular-nums text-amber-400">
+                            {fmtNum(economy.summary.totalReferral)} ({economy.summary.totalReferralCount})
                           </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Gift All Dialog */}
-                      <AlertDialog open={giftDialogOpen} onOpenChange={setGiftDialogOpen}>
-                        <AlertDialogContent className="bg-stone-900 border-stone-700">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle className="text-stone-100">Начислить кристаллы всем</AlertDialogTitle>
-                            <AlertDialogDescription className="text-stone-400">
-                              Каждый пользователь получит указанное количество кристаллов. Это действие нельзя отменить.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <div className="py-2">
-                            <Input type="number" value={giftAmount} onChange={(e) => setGiftAmount(e.target.value)}
-                              placeholder="Количество кристаллов" className="bg-stone-950 border-stone-700" min={1} />
+                        </div>
+                        <div>
+                          <div className="text-zinc-500 mb-0.5">Админ-подарки</div>
+                          <div className="font-mono tabular-nums text-amber-400">
+                            {fmtNum(economy.summary.totalAdminGift)} ({economy.summary.totalAdminGiftCount})
                           </div>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel className="bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700">Отмена</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleGiftAll} disabled={quickActionLoading}
-                              className="bg-amber-800 text-amber-100 hover:bg-amber-700">
-                              {quickActionLoading ? 'Выполнение…' : '💎 Начислить'}
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                        </div>
+                        <div>
+                          <div className="text-zinc-500 mb-0.5">Начисления всего</div>
+                          <div className="font-mono tabular-nums text-amber-400">
+                            {fmtNum(economy.summary.totalAdded)} ({economy.summary.totalAddedCount})
+                          </div>
+                        </div>
+                      </div>
+                    </BentoTile>
 
-                      {/* Reset Streaks Dialog */}
-                      <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
-                        <AlertDialogContent className="bg-stone-900 border-stone-700">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle className="text-stone-100">Сбросить все серии</AlertDialogTitle>
-                            <AlertDialogDescription className="text-stone-400">
-                              Это сбросит streakDays у всех пользователей до 0. Действие необратимо.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel className="bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700">Отмена</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleResetStreaks} disabled={quickActionLoading}
-                              className="bg-rose-800 text-rose-100 hover:bg-rose-700">
-                              {quickActionLoading ? 'Выполнение…' : '🔥 Сбросить'}
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </>
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <BadgePercent className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Разбивка по типам</h3>
+                      </div>
+                      <div className="space-y-3">
+                        {economy.typeBreakdown.length === 0 && (
+                          <EmptyState icon={Wallet} title="Нет транзакций" description="Появятся при активности пользователей" />
+                        )}
+                        {economy.typeBreakdown.map((tb) => {
+                          const maxTotal = Math.max(...economy.typeBreakdown.map((x) => Math.abs(x.total)), 1);
+                          const pct = (Math.abs(tb.total) / maxTotal) * 100;
+                          const positive = tb.total >= 0;
+                          return (
+                            <div key={tb.type} className="space-y-1.5">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-zinc-300">{TX_TYPE_LABELS[tb.type] ?? tb.type}</span>
+                                <span className="font-mono tabular-nums text-zinc-400">
+                                  {fmtNum(tb.count)} · {fmtNum(tb.total)} 💎
+                                </span>
+                              </div>
+                              <div className="h-1.5 bg-zinc-800/70 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-700 ${positive ? 'bg-amber-500/70' : 'bg-zinc-500/70'}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </BentoTile>
+                  </div>
+
+                  {/* Transactions table */}
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100">Транзакции</h3>
+                      <p className="text-xs text-zinc-500 mt-0.5 font-mono tabular-nums">Всего: {fmtNum(economy.total)}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {TX_FILTERS.map((t) => (
+                        <button
+                          key={t.value}
+                          onClick={() => { setEcoType(t.value); setEcoPage(1); fetchEconomy(1, t.value); }}
+                          className={`h-7 px-2.5 text-[11px] font-medium rounded-md border transition-colors active:translate-y-px ${
+                            ecoType === t.value
+                              ? 'bg-amber-500/10 border-amber-500/40 text-amber-400'
+                              : 'bg-zinc-900/40 border-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700/80'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-zinc-800/60 overflow-hidden">
+                    <div className="max-h-[28rem] overflow-y-auto sofia-scroll">
+                      <Table>
+                        <TableHeader className="sticky top-0 bg-zinc-950/95 backdrop-blur-sm z-10">
+                          <TableRow className="border-zinc-800/60 hover:bg-transparent">
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Пользователь</TableHead>
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Тип</TableHead>
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Сумма</TableHead>
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Описание</TableHead>
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium text-right">Баланс</TableHead>
+                            <TableHead className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Дата</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {loading.economy && Array.from({ length: 6 }).map((_, i) => (
+                            <TableRow key={i} className="border-zinc-800/60">
+                              {Array.from({ length: 6 }).map((__, j) => (
+                                <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                          {!loading.economy && economy.transactions.map((tx) => (
+                            <TableRow key={tx.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                              <TableCell className="text-zinc-200 text-sm">
+                                {tx.user.name ?? tx.user.firstName ?? tx.user.username ?? '-'}
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-[11px] text-zinc-300">{TX_TYPE_LABELS[tx.type] ?? tx.type}</span>
+                              </TableCell>
+                              <TableCell className={`text-right font-mono tabular-nums text-sm ${tx.amount >= 0 ? 'text-amber-400' : 'text-zinc-400'}`}>
+                                {tx.amount >= 0 ? '+' : ''}{tx.amount}
+                              </TableCell>
+                              <TableCell className="text-zinc-500 text-xs max-w-32 truncate">{tx.description ?? '-'}</TableCell>
+                              <TableCell className="text-right font-mono tabular-nums text-zinc-300 text-sm">
+                                {tx.balanceAfter ?? '-'}
+                              </TableCell>
+                              <TableCell className="text-zinc-500 text-xs font-mono tabular-nums whitespace-nowrap">{timeAgo(tx.createdAt)}</TableCell>
+                            </TableRow>
+                          ))}
+                          {!loading.economy && economy.transactions.length === 0 && (
+                            <TableRow className="border-zinc-800/60">
+                              <TableCell colSpan={6}>
+                                <EmptyState icon={Wallet} title="Нет транзакций" description="Появятся при активности пользователей" />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+
+                  {economy.totalPages > 1 && (
+                    <div className="flex items-center justify-between">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={ecoPage <= 1}
+                        onClick={() => { const p = ecoPage - 1; setEcoPage(p); fetchEconomy(p, ecoType); }}
+                        className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 active:translate-y-px disabled:opacity-40"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} /> Назад
+                      </Button>
+                      <span className="text-xs text-zinc-500 font-mono tabular-nums">
+                        {ecoPage} / {economy.totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={ecoPage >= economy.totalPages}
+                        onClick={() => { const p = ecoPage + 1; setEcoPage(p); fetchEconomy(p, ecoType); }}
+                        className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-zinc-100 active:translate-y-px disabled:opacity-40"
+                      >
+                        Вперёд <ArrowRight className="w-3.5 h-3.5 ml-1.5" strokeWidth={1.5} />
+                      </Button>
+                    </div>
                   )}
-                </div>
-              </TabsContent>
-            </Tabs>
-          </section>
+                </>
+              )}
+            </TabTransition>
+          )}
 
-          {/* Architecture summary */}
-          <section className="grid md:grid-cols-3 gap-4">
-            <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Bot className="w-4 h-4 text-amber-500" /> Архитектура</CardTitle></CardHeader>
-              <CardContent className="text-sm text-stone-400 space-y-1.5">
-                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Clean Architecture (4 слоя)</p>
-                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> grammY + TypeScript + Prisma</p>
-                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> z-ai-web-dev-sdk для ИИ</p>
-                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> FSM с сохранением в БД</p>
-                <p className="flex items-start gap-2"><span className="text-amber-500">•</span> Mini-service на порту 3003</p>
-              </CardContent>
-            </Card>
-            <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Heart className="w-4 h-4 text-rose-400" /> Личность</CardTitle></CardHeader>
-              <CardContent className="text-sm text-stone-400 space-y-1.5">
-                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Хранительница — тепло, безопасность</p>
-                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Наблюдатель — мягкая психология</p>
-                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Проводник — карты как зеркало</p>
-                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Нравственный кодекс</p>
-                <p className="flex items-start gap-2"><span className="text-rose-400">•</span> Эмоциональная память</p>
-              </CardContent>
-            </Card>
-            <Card className={`${CARD_BASE} ${CARD_HOVER}`}>
-              <CardHeader><CardTitle className="text-stone-100 font-serif text-lg flex items-center gap-2"><Zap className="w-4 h-4 text-amber-400" /> Возможности</CardTitle></CardHeader>
-              <CardContent className="text-sm text-stone-400 space-y-1.5">
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 6 типов раскладов Таро</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Карта дня + аффирмации</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> Реферальная программа</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> История раскладов</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🌐 Двуязычность (RU/EN)</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 📨 Недельный дайджест</p>
-                <p className="flex items-start gap-2"><span className="text-amber-400">•</span> 🔥 Серии и удержание</p>
-              </CardContent>
-            </Card>
-          </section>
+          {/* DIGEST */}
+          {activeTab === 'digest' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Дайджест"
+                description="Превью недельной сводки, которую София отправляет админам каждое воскресенье."
+                right={
+                  digest?.lastSentAt ? (
+                    <span className="text-xs text-zinc-400 font-mono tabular-nums">
+                      Отправлен: {timeAgo(digest.lastSentAt)}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-amber-400 font-mono">Ещё не отправлялся на этой неделе</span>
+                  )
+                }
+              />
+
+              {!digest ? (
+                <BentoTile interactive={false}><Skeleton className="h-64 w-full" /></BentoTile>
+              ) : (
+                <>
+                  <BentoTile>
+                    <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-1.5">
+                          Период
+                        </p>
+                        <div className="text-lg font-semibold text-zinc-100 font-mono tabular-nums">
+                          {new Date(digest.weekRange.from).toLocaleDateString('ru-RU')} - {new Date(digest.weekRange.to).toLocaleDateString('ru-RU')}
+                        </div>
+                      </div>
+                      <Mail className="w-5 h-5 text-amber-400" strokeWidth={1.5} />
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-4 border-t border-zinc-800/70">
+                      <DigestStat icon={Users} label="Новых" value={digest.stats.newUsers} />
+                      <DigestStat icon={Activity} label="Активны 7д" value={digest.stats.active7d} />
+                      <DigestStat icon={MessageCircle} label="Сообщений" value={digest.stats.messages} />
+                      <DigestStat icon={Sparkles} label="Раскладов" value={digest.stats.readings} />
+                      <DigestStat icon={Gem} label="Кристаллов" value={digest.stats.crystalsSpent} />
+                    </div>
+                  </BentoTile>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Crown className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Топ-5 за неделю</h3>
+                      </div>
+                      <div className="space-y-1.5">
+                        {digest.topUsers.length === 0 && (
+                          <EmptyState icon={Users} title="Нет активных пользователей" description="Активные появятся на следующей неделе" />
+                        )}
+                        {digest.topUsers.map((u, i) => (
+                          <div key={u.id} className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-zinc-900/60 transition-colors">
+                            <span className={`text-xs font-mono tabular-nums w-6 ${i < 3 ? 'text-amber-400' : 'text-zinc-500'}`}>
+                              {String(i + 1).padStart(2, '0')}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-zinc-200 truncate">{u.name}</div>
+                              <div className="text-[11px] text-zinc-500 font-mono truncate">
+                                {u.username ? `@${u.username}` : ''}{u.zodiacSign ? ` · ${ZODIAC_EMOJI[u.zodiacSign] ?? ''} ${u.zodiacSign}` : ''}
+                              </div>
+                            </div>
+                            <div className="text-right text-xs">
+                              <div className="font-mono tabular-nums text-zinc-200">{u.messageCount} сообщ.</div>
+                              {u.streakDays > 0 && (
+                                <div className="font-mono tabular-nums text-amber-400">🔥 {u.streakDays}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </BentoTile>
+
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Sparkles className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Расклады за неделю</h3>
+                      </div>
+                      <div className="space-y-2.5">
+                        {digest.readingsByType.length === 0 && (
+                          <EmptyState icon={Sparkles} title="Не было раскладов" description="На этой неделе не было раскладов" />
+                        )}
+                        {digest.readingsByType.map((r) => {
+                          const max = digest.readingsByType[0]?.count ?? 1;
+                          return (
+                            <MiniBar
+                              key={r.type}
+                              label={READING_LABELS[r.type] ?? r.type}
+                              value={r.count}
+                              max={max}
+                              display={fmtNum(r.count)}
+                              color={READING_BAR_COLOR[r.type] ?? 'bg-amber-500/70'}
+                            />
+                          );
+                        })}
+                      </div>
+                    </BentoTile>
+                  </div>
+
+                  {digest.recentBroadcasts.length > 0 && (
+                    <BentoTile>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Send className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Рассылки на этой неделе</h3>
+                      </div>
+                      <div className="divide-y divide-zinc-800/70 -mx-1">
+                        {digest.recentBroadcasts.map((b) => (
+                          <div key={b.id} className="px-1 py-2.5">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className={`text-[11px] font-mono ${b.status === 'done' ? 'text-amber-400' : 'text-zinc-500'}`}>
+                                {b.status === 'done' ? 'отправлено' : b.status}
+                              </span>
+                              <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{timeAgo(b.createdAt)}</span>
+                            </div>
+                            <p className="text-sm text-zinc-300 line-clamp-2 mb-1">{b.text}</p>
+                            <p className="text-[11px] text-zinc-500 font-mono tabular-nums">
+                              Отправлено: {b.sentCount} / {b.total}{b.failedCount > 0 ? ` · ошибок: ${b.failedCount}` : ''}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </BentoTile>
+                  )}
+                </>
+              )}
+            </TabTransition>
+          )}
+
+          {/* BROADCASTS */}
+          {activeTab === 'broadcasts' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Рассылки"
+                description="Отправка сообщений всем пользователям. Рассылка уходит асинхронно - бот забирает её из БД каждые 8 секунд."
+              />
+
+              <BentoTile>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-zinc-100">Новая рассылка</h3>
+                  <span className={`text-[11px] font-mono tabular-nums ${broadcastText.length > 800 ? 'text-amber-400' : 'text-zinc-500'}`}>
+                    {broadcastText.length} / 1024
+                  </span>
+                </div>
+                <Textarea
+                  placeholder="Текст рассылки. Поддерживается HTML-форматирование."
+                  value={broadcastText}
+                  onChange={(e) => setBroadcastText(e.target.value)}
+                  rows={5}
+                  maxLength={1024}
+                  className="bg-zinc-950/60 border-zinc-800/70 text-sm resize-none font-mono placeholder:text-zinc-600"
+                />
+                <div className="flex items-center justify-between gap-3 flex-wrap mt-3">
+                  <p className="text-[11px] text-zinc-500 max-w-[60ch] leading-relaxed">
+                    Рассылка отправится асинхронно - бот берёт её из БД каждые 8 секунд.
+                  </p>
+                  <Button
+                    onClick={sendBroadcast}
+                    disabled={sending || !broadcastText.trim()}
+                    className="bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
+                  >
+                    <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+                    {sending ? 'Отправка...' : 'Отправить'}
+                  </Button>
+                </div>
+              </BentoTile>
+
+              <BentoTile>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-zinc-100">История рассылок</h3>
+                  <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{fmtNum(broadcasts.length)}</span>
+                </div>
+                <div className="divide-y divide-zinc-800/70 -mx-1 max-h-96 overflow-y-auto sofia-scroll">
+                  {loading.broadcasts && <div className="px-1 py-3"><Skeleton className="h-16 w-full" /></div>}
+                  {!loading.broadcasts && broadcasts.length === 0 && (
+                    <EmptyState icon={Send} title="Рассылок пока не было" description="Создайте первую рассылку, чтобы уведомить пользователей" />
+                  )}
+                  {broadcasts.map((b) => (
+                    <div key={b.id} className="px-1 py-2.5 hover:bg-zinc-900/40 transition-colors -mx-1 px-2 rounded">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-[11px] font-mono ${b.status === 'done' ? 'text-amber-400' : 'text-zinc-500'}`}>
+                          {b.status === 'done' ? 'отправлено' : b.status}
+                        </span>
+                        <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{timeAgo(b.createdAt)}</span>
+                      </div>
+                      <p className="text-sm text-zinc-300 line-clamp-2 mb-1">{b.text}</p>
+                      <div className="flex items-center gap-3 text-[11px] text-zinc-500 font-mono tabular-nums">
+                        <span>Отправлено: {b.sentCount} / {b.total}</span>
+                        {b.failedCount > 0 && <span className="text-rose-400">ошибок: {b.failedCount}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </BentoTile>
+            </TabTransition>
+          )}
+
+          {/* SETTINGS */}
+          {activeTab === 'settings' && (
+            <TabTransition className="space-y-5">
+              <SectionHeader
+                title="Настройки"
+                description="Конфигурация бота в виде ключ / значение. Изменения применяются при следующем опросе ботом БД."
+              />
+
+              {!settingsData ? (
+                <BentoTile interactive={false}><Skeleton className="h-64 w-full" /></BentoTile>
+              ) : (
+                <>
+                  <BentoTile>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        <h3 className="text-sm font-semibold text-zinc-100">Конфигурация бота</h3>
+                      </div>
+                      <span className="text-[11px] text-zinc-500 font-mono tabular-nums">
+                        {fmtNum(settingsData.settings.length)} параметров
+                      </span>
+                    </div>
+                    <div className="divide-y divide-zinc-800/70 max-h-[32rem] overflow-y-auto sofia-scroll -mx-1">
+                      {settingsData.settings.map((s) => {
+                        const isModified = editValues[s.key] !== s.value;
+                        const isSaving = savingSettings[s.key] ?? false;
+                        const isSaved = savedSettings[s.key] ?? false;
+                        return (
+                          <div key={s.id} className="px-1 py-3 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-center">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <code className="text-xs font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                                  {s.key}
+                                </code>
+                                {isModified && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-amber-500/5">
+                                    изменён
+                                  </span>
+                                )}
+                                {isSaved && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-amber-500/5 inline-flex items-center gap-1">
+                                    <Check className="w-2.5 h-2.5" strokeWidth={2} /> сохранено
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-zinc-500 font-mono tabular-nums flex items-center gap-1">
+                                <Clock className="w-3 h-3" strokeWidth={1.5} /> обновлено: {timeAgo(s.updatedAt)}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                value={editValues[s.key] ?? s.value}
+                                onChange={(e) => setEditValues((v) => ({ ...v, [s.key]: e.target.value }))}
+                                className="w-56 h-8 bg-zinc-950/60 border-zinc-800/70 text-xs font-mono"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!isModified || isSaving}
+                                onClick={() => saveSetting(s.key)}
+                                className="h-8 w-8 p-0 border-zinc-800/70 bg-zinc-900/50 text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/40 active:translate-y-px disabled:opacity-30"
+                              >
+                                {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} /> : <Save className="w-3.5 h-3.5" strokeWidth={1.5} />}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {settingsData.settings.length === 0 && (
+                        <EmptyState icon={Settings} title="Настроек пока нет" description="Появятся после первого запуска бота" />
+                      )}
+                    </div>
+                  </BentoTile>
+
+                  <BentoTile>
+                    <div className="flex items-center gap-2 mb-4">
+                      <Zap className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                      <h3 className="text-sm font-semibold text-zinc-100">Быстрые действия</h3>
+                    </div>
+                    <p className="text-xs text-zinc-500 mb-4 max-w-[60ch]">Массовые операции с подтверждением. Выполняются асинхронно при следующем опросе ботом БД.</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setGiftDialogOpen(true)}
+                        className="h-8 border-amber-500/40 bg-amber-500/5 text-amber-400 hover:bg-amber-500/10 active:translate-y-px"
+                      >
+                        <Gift className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} /> Начислить всем
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setResetDialogOpen(true)}
+                        className="h-8 border-rose-500/40 bg-rose-500/5 text-rose-400 hover:bg-rose-500/10 active:translate-y-px"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} /> Сбросить серии
+                      </Button>
+                    </div>
+                  </BentoTile>
+
+                  {/* Gift All Dialog */}
+                  <AlertDialog open={giftDialogOpen} onOpenChange={setGiftDialogOpen}>
+                    <AlertDialogContent className="bg-zinc-900 border-zinc-800">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-zinc-100">Начислить кристаллы всем</AlertDialogTitle>
+                        <AlertDialogDescription className="text-zinc-400">
+                          Каждый пользователь получит указанное количество кристаллов. Действие необратимо.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <div className="py-2">
+                        <Input
+                          type="number"
+                          value={giftAmount}
+                          onChange={(e) => setGiftAmount(e.target.value)}
+                          placeholder="Количество кристаллов"
+                          className="bg-zinc-950/60 border-zinc-800/70 font-mono"
+                          min={1}
+                        />
+                      </div>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100">Отмена</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={handleGiftAll}
+                          disabled={quickActionLoading}
+                          className="bg-amber-500 text-zinc-950 hover:bg-amber-400"
+                        >
+                          {quickActionLoading ? 'Выполнение...' : 'Начислить'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+
+                  {/* Reset Streaks Dialog */}
+                  <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                    <AlertDialogContent className="bg-zinc-900 border-zinc-800">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-zinc-100">Сбросить все серии</AlertDialogTitle>
+                        <AlertDialogDescription className="text-zinc-400">
+                          Это сбросит streakDays у всех пользователей до 0. Действие необратимо.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100">Отмена</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={handleResetStreaks}
+                          disabled={quickActionLoading}
+                          className="bg-rose-500 text-zinc-50 hover:bg-rose-400"
+                        >
+                          {quickActionLoading ? 'Выполнение...' : 'Сбросить'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </>
+              )}
+            </TabTransition>
+          )}
         </main>
 
-        <footer className="mt-auto border-t border-amber-900/30 bg-stone-950" style={{ borderTopImage: 'linear-gradient(to right, transparent, rgba(217,119,6,0.3), transparent) 1' }}>
-          <div className="container mx-auto px-4 py-6 flex flex-col items-center gap-2">
-            <div className="flex items-center gap-4 text-sm text-stone-500">
-              <span>🔮 София — мудрая ведунья</span>
-              <span className="text-stone-700">|</span>
-              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 sofia-pulse-dot" /> v2.0</span>
-              <span className="text-stone-700">|</span>
-              <span>Clean Architecture</span>
+        {/* ─── Sticky footer ───────────────────────────────────── */}
+        <footer className="mt-auto border-t border-zinc-800/60 bg-zinc-950">
+          <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-4 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-zinc-500">
+              <span className="text-zinc-300 font-medium">Sofia Bot Admin</span>
+              <span className="text-zinc-700">/</span>
+              <span className="font-mono tabular-nums">v2.0</span>
             </div>
-            <div className="text-xs text-stone-600 flex items-center gap-3">
-              <span>Документация: <code className="text-stone-400">docs/</code></span>
-              <span>Worklog: <code className="text-stone-400">worklog.md</code></span>
-              <a href="https://t.me/oracultetris_bot" target="_blank" rel="noreferrer" className="text-amber-700 hover:text-amber-500 transition-colors">
+            <div className="flex items-center gap-4 text-xs text-zinc-500">
+              <a
+                href="https://t.me/oracultetris_bot"
+                target="_blank"
+                rel="noreferrer"
+                className="text-amber-400 hover:text-amber-300 active:translate-y-px transition-colors font-mono"
+              >
                 @oracultetris_bot
               </a>
             </div>
@@ -1584,28 +1909,40 @@ export default function Page() {
 
 /* ─── Sub-components ──────────────────────────────────────────────────── */
 
-function StatCard({ icon: Icon, label, value, loading, accent, sub, spark, sparkColor }: {
-  icon: React.ComponentType<{ className?: string }>; label: string; value?: number; loading?: boolean;
-  accent: string; sub?: string; spark?: number[]; sparkColor?: string;
-}) {
+function ZodiacBreakdown({ counts }: { counts: Record<string, number> }) {
+  const entries = Object.entries(ZODIAC_EMOJI).map(([name, emoji]) => ({
+    name, emoji, count: counts[name] ?? 0,
+  }));
+  const sorted = entries.sort((a, b) => b.count - a.count);
+  const total = sorted.reduce((a, b) => a + b.count, 0);
   return (
-    <Card className={`${CARD_BASE} ${CARD_HOVER} group hover:scale-[1.02]`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-2">
-          <span className="text-xs text-stone-400">{label}</span>
-          <Icon className={`w-4 h-4 ${accent} group-hover:scale-110 transition-transform`} />
+    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+      {sorted.map((e) => (
+        <div key={e.name} className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400 truncate">
+            <span className="mr-1">{e.emoji}</span>{e.name}
+          </span>
+          <span className={`font-mono tabular-nums ${e.count > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>
+            {e.count}
+          </span>
         </div>
-        <div className={`text-2xl font-bold font-mono ${accent} flex items-baseline gap-2`}>
-          {loading ? <Skeleton className="h-7 w-16" /> : (
-            <AnimatedNumber value={value ?? 0} />
-          )}
-          {spark && spark.length > 0 && !loading && (
-            <Sparkline data={spark} width={70} height={20} color={sparkColor ?? '#f59e0b'} />
-          )}
-        </div>
-        {sub && <div className="text-xs text-stone-500 mt-1">{sub}</div>}
-      </CardContent>
-    </Card>
+      ))}
+      <div className="col-span-2 mt-1 pt-2 border-t border-zinc-800/70 flex justify-between text-[11px]">
+        <span className="text-zinc-500 uppercase tracking-wider">Всего</span>
+        <span className="font-mono tabular-nums text-zinc-300">{fmtNum(total)}</span>
+      </div>
+    </div>
+  );
+}
+
+function HeroStat({ label, value, loading }: { label: string; value?: number; loading?: boolean }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-1">{label}</p>
+      <div className="text-xl font-mono tabular-nums font-semibold text-zinc-100">
+        {loading ? <Skeleton className="h-6 w-16" /> : <AnimatedNumber value={value ?? 0} />}
+      </div>
+    </div>
   );
 }
 
@@ -1613,25 +1950,42 @@ function FunnelBar({ label, value, max, color }: { label: string; value: number;
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
     <div>
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-stone-400">{label}</span>
-        <span className="font-mono text-stone-300">{value.toLocaleString('ru-RU')}</span>
+      <div className="flex justify-between text-xs mb-1.5">
+        <span className="text-zinc-400">{label}</span>
+        <span className="font-mono tabular-nums text-zinc-300">{fmtNum(value)}</span>
       </div>
-      <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+      <div className="h-1.5 bg-zinc-800/70 rounded-full overflow-hidden">
         <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
 }
 
-function DigestStat({ icon: Icon, label, value, color }: {
-  icon: React.ComponentType<{ className?: string }>; label: string; value: number; color: string;
+function FlowBar({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs mb-1.5">
+        <span className="text-zinc-400">{label}</span>
+        <span className="font-mono tabular-nums text-zinc-200">{fmtNum(value)}</span>
+      </div>
+      <div className="h-2 bg-zinc-800/70 rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DigestStat({ icon: Icon, label, value }: {
+  icon: React.ComponentType<{ className?: string }>; label: string; value: number;
 }) {
   return (
-    <div className="rounded-lg bg-stone-950/40 border border-stone-800 p-3 text-center sofia-card-enter">
-      <Icon className={`w-4 h-4 mx-auto ${color} mb-1`} />
-      <div className={`text-xl font-bold font-mono ${color}`}><AnimatedNumber value={value} /></div>
-      <div className="text-xs text-stone-500">{label}</div>
+    <div className="space-y-1.5">
+      <Icon className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+      <div className="text-2xl font-mono tabular-nums font-semibold text-zinc-100">
+        <AnimatedNumber value={value} />
+      </div>
+      <div className="text-[11px] uppercase tracking-wider text-zinc-500">{label}</div>
     </div>
   );
 }
@@ -1642,11 +1996,9 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
   return (
     <div className="space-y-4">
       <div>
-        <div className="flex items-center justify-between text-xs mb-2">
-          <span className="text-stone-400 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-amber-500" /> Сообщения
-          </span>
-          <span className="text-stone-500">max: {maxMsgs}</span>
+        <div className="flex items-center justify-between text-[11px] mb-2 font-mono tabular-nums">
+          <span className="text-zinc-500">макс. сообщений</span>
+          <span className="text-zinc-400">{fmtNum(maxMsgs)}</span>
         </div>
         <div className="flex items-end gap-1 h-32">
           {buckets.map((b) => {
@@ -1656,18 +2008,18 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
                 <TooltipTrigger asChild>
                   <div className="flex-1 group cursor-pointer">
                     <div
-                      className="w-full rounded-t bg-gradient-to-t from-amber-900/40 to-amber-500/80 group-hover:from-amber-800/60 group-hover:to-amber-400/100 group-hover:shadow-[0_0_8px_rgba(245,158,11,0.3)] transition-all"
+                      className="w-full rounded-t bg-amber-500/70 group-hover:bg-amber-400 transition-colors"
                       style={{ height: `${Math.max(2, h)}%` }}
                     />
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <div className="text-xs">
-                    <div className="font-mono">{shortDate(b.date)}</div>
-                    <div className="text-amber-300">{b.messages} сообщ.</div>
-                    <div className="text-stone-400">раскладов: {b.readings}</div>
-                    <div className="text-emerald-400">новых: {b.newUsers}</div>
-                    <div className="text-amber-500">💎 {b.crystalsSpent}</div>
+                  <div className="text-xs font-mono tabular-nums">
+                    <div>{shortDate(b.date)}</div>
+                    <div className="text-amber-300">{fmtNum(b.messages)} сообщ.</div>
+                    <div className="text-zinc-400">раскладов: {b.readings}</div>
+                    <div className="text-zinc-400">новых: {b.newUsers}</div>
+                    <div className="text-zinc-400">кристаллов: {b.crystalsSpent}</div>
                   </div>
                 </TooltipContent>
               </Tooltip>
@@ -1676,19 +2028,17 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
         </div>
       </div>
       <div>
-        <div className="flex items-center justify-between text-xs mb-2">
-          <span className="text-stone-400 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-purple-500" /> Расклады
-          </span>
-          <span className="text-stone-500">max: {maxReadings}</span>
+        <div className="flex items-center justify-between text-[11px] mb-2 font-mono tabular-nums">
+          <span className="text-zinc-500">макс. раскладов</span>
+          <span className="text-zinc-400">{fmtNum(maxReadings)}</span>
         </div>
-        <div className="flex items-end gap-1 h-16">
+        <div className="flex items-end gap-1 h-12">
           {buckets.map((b) => {
             const h = (b.readings / maxReadings) * 100;
             return (
               <div key={b.date} className="flex-1">
                 <div
-                  className="w-full rounded-t bg-gradient-to-t from-purple-900/40 to-purple-500/80 transition-all hover:shadow-[0_0_8px_rgba(168,85,247,0.3)]"
+                  className="w-full rounded-t bg-amber-500/30 hover:bg-amber-400/60 transition-colors"
                   style={{ height: `${Math.max(2, h)}%` }}
                 />
               </div>
@@ -1696,7 +2046,7 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
           })}
         </div>
       </div>
-      <div className="flex justify-between text-xs text-stone-500">
+      <div className="flex justify-between text-[11px] text-zinc-500 font-mono tabular-nums">
         <span>{shortDate(buckets[0]?.date ?? new Date().toISOString())}</span>
         <span>{shortDate(buckets[buckets.length - 1]?.date ?? new Date().toISOString())}</span>
       </div>
