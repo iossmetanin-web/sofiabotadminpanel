@@ -27,6 +27,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import {
   Users, MessageCircle, Sparkles, Gem, TrendingUp, Activity, Send,
@@ -35,7 +40,8 @@ import {
   Eye, Settings, Download, ChevronDown, ChevronUp, Wallet,
   Plus, Minus, ExternalLink, FileDown, RotateCcw, Save, Check,
   HandCoins, UserPlus, BadgePercent, Search, ArrowRight, ArrowLeft,
-  Ban, ShieldCheck, Power, Terminal, ServerCog,
+  Ban, ShieldCheck, Power, Terminal, ServerCog, Copy, Link2, Globe, Radio,
+  Pause, Play, Timer, MailCheck, AlertTriangle, UserX, MessageSquare, StickyNote,
 } from 'lucide-react';
 import { Sparkline } from '@/components/sofia/Sparkline';
 import { ZodiacWheel } from '@/components/sofia/ZodiacWheel';
@@ -100,7 +106,48 @@ type BotStatus = {
   version?: string | null;
   uptime?: number | null;
   pollingMode?: string;
+  webhook?: {
+    url: string;
+    pending_update_count: number;
+    last_error_date: number | null;
+    last_error_message: string | null;
+  } | null;
   error?: string;
+};
+
+type WebhookInfo = {
+  ok: boolean;
+  bot?: { username: string; id: number } | null;
+  webhook?: {
+    url: string;
+    pending_update_count: number;
+    last_error_date: number | null;
+    last_error_message: string | null;
+    max_connections: number | null;
+    has_custom_certificate: boolean;
+  };
+  error?: string;
+};
+
+type UserDetailMemory = {
+  id: string; kind: string; category: string; content: string; importance: number; createdAt: string;
+};
+
+type UserDetail = {
+  user: {
+    id: string; telegramId: string; username: string | null; firstName: string | null; lastName: string | null;
+    name: string | null; language: string; birthDate: string | null; birthTime: string | null;
+    birthPlace: string | null; gender: string | null; ageGroup: string | null;
+    zodiacSign: string | null; onboardingCompleted: boolean; onboardingStep: string;
+    crystals: number; messageCount: number; streakDays: number; lastActivityDay: string | null;
+    isBlocked: boolean; isAdmin: boolean; lastSeenAt: string | null; createdAt: string;
+    subscriptionType: string | null; subscriptionUntil: string | null; referredById: string | null;
+  };
+  stats: { conversations: number; referrals: number; memories: number; readings: number; transactions: number };
+  readings: { id: string; type: string; question: string | null; cards: string; interpretation: string; cost: number; createdAt: string }[];
+  transactions: { id: string; type: string; amount: number; description: string | null; balanceAfter: number | null; createdAt: string }[];
+  memories: UserDetailMemory[];
+  referrer: { name: string | null; firstName: string | null; username: string | null; telegramId: string } | null;
 };
 
 type ActivityBucket = {
@@ -275,6 +322,29 @@ function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }
 
+function formatUptime(seconds: number | null | undefined): string {
+  if (seconds == null) return '—';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (d > 0) return `${d}д ${h}ч`;
+  if (h > 0) return `${h}ч ${m}м`;
+  if (m > 0) return `${m}м ${s}с`;
+  return `${s}с`;
+}
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return timeAgo(iso);
+}
+
 function fmtNum(n: number): string {
   return n.toLocaleString('ru-RU');
 }
@@ -327,6 +397,24 @@ export default function Page() {
   const [banTelegramId, setBanTelegramId] = useState('');
   const [cmdLoading, setCmdLoading] = useState<Record<string, boolean>>({});
   const [shutdownDialogOpen, setShutdownDialogOpen] = useState(false);
+
+  // Feature 1: Webhook state
+  const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
+  const [webhookLoading, setWebhookLoading] = useState(false);
+  const [webhookSetupLoading, setWebhookSetupLoading] = useState(false);
+
+  // Feature 2: User Detail Modal state
+  const [userDetailOpen, setUserDetailOpen] = useState(false);
+  const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
+  const [userDetailLoading, setUserDetailLoading] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
+
+  // Feature 3: Auto-refresh state
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+
+  // Feature 4: Broadcast test state
+  const [testingBroadcast, setTestingBroadcast] = useState(false);
 
   /* ─── Data fetchers ─────────────────────────────────────────────── */
 
@@ -433,6 +521,78 @@ export default function Page() {
       /* silent */
     } finally { setLoading((l) => ({ ...l, commands: false })); }
   }, []);
+
+  // Feature 1: Fetch webhook status
+  const fetchWebhookStatus = useCallback(async () => {
+    setWebhookLoading(true);
+    try {
+      const res = await fetch('/api/telegram/status');
+      const data = await res.json();
+      setWebhookInfo(data);
+    } catch {
+      setWebhookInfo({ ok: false, error: 'не удалось получить статус' });
+    } finally { setWebhookLoading(false); }
+  }, []);
+
+  // Feature 1: Setup webhook
+  const setupWebhook = async () => {
+    setWebhookSetupLoading(true);
+    try {
+      const res = await fetch('/api/telegram/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const data = await res.json();
+      if (data.ok) {
+        toast.success(`Webhook установлен: ${data.webhookUrl}`);
+        fetchWebhookStatus();
+        fetchBotStatus();
+      } else {
+        toast.error(data.error ?? 'Ошибка установки webhook');
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      toast.error('Ошибка: ' + msg);
+    } finally { setWebhookSetupLoading(false); }
+  };
+
+  // Feature 2: Fetch user detail
+  const fetchUserDetail = useCallback(async (telegramId: string) => {
+    setUserDetailLoading(true);
+    setUserDetailOpen(true);
+    try {
+      const res = await fetch(`/api/users/${telegramId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setUserDetail(data);
+      } else {
+        toast.error('Пользователь не найден');
+        setUserDetailOpen(false);
+      }
+    } catch {
+      toast.error('Ошибка загрузки профиля');
+      setUserDetailOpen(false);
+    } finally { setUserDetailLoading(false); }
+  }, []);
+
+  // Feature 4: Test broadcast to admin
+  const testBroadcastToMe = async () => {
+    if (!broadcastText.trim()) { toast.error('Введите текст рассылки'); return; }
+    setTestingBroadcast(true);
+    try {
+      const res = await fetch('/api/bot/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'dm', payload: { telegramId: 'admin', text: broadcastText } }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Тестовое сообщение отправлено админу');
+      } else {
+        toast.error(data.error ?? 'Ошибка отправки теста');
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      toast.error('Ошибка: ' + msg);
+    } finally { setTestingBroadcast(false); }
+  };
 
   /* ─── Effects ───────────────────────────────────────────────────── */
 
@@ -641,6 +801,7 @@ export default function Page() {
   };
 
   const refreshCurrentTab = () => {
+    setLastRefreshTime(new Date());
     if (activeTab === 'overview') { fetchStats(); fetchBotStatus(); fetchActivity(); fetchReferrals(); }
     if (activeTab === 'users') fetchUsers(usersPage, search);
     if (activeTab === 'readings') fetchReadings();
@@ -648,9 +809,16 @@ export default function Page() {
     if (activeTab === 'economy') fetchEconomy(ecoPage, ecoType);
     if (activeTab === 'digest') fetchDigest();
     if (activeTab === 'broadcasts') fetchBroadcasts();
-    if (activeTab === 'manage') { fetchCommands(); fetchBotStatus(); }
+    if (activeTab === 'manage') { fetchCommands(); fetchBotStatus(); fetchWebhookStatus(); }
     if (activeTab === 'settings') fetchSettings();
   };
+
+  // Feature 3: Auto-refresh effect
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => { refreshCurrentTab(); }, 30_000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, activeTab]);
 
   /* ─── Derived ───────────────────────────────────────────────────── */
 
@@ -676,7 +844,7 @@ export default function Page() {
     <TooltipProvider delayDuration={200}>
       <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
         {/* ─── Sticky top nav ──────────────────────────────────── */}
-        <header className="sticky top-0 z-50 h-16 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-xl">
+        <header className="sticky top-0 z-50 h-16 border-b border-zinc-800/60 bg-gradient-to-b from-zinc-950 to-zinc-900/80 backdrop-blur-xl">
           <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-full flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/5 shadow-sm shadow-amber-500/10">
@@ -699,13 +867,13 @@ export default function Page() {
                     type="button"
                   >
                     <span
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                      className={`h-2 w-2 rounded-full ${
+                        botStatus?.ok ? 'bg-emerald-400 animate-heartbeat animate-green-pulse-ring' : 'bg-rose-500/80'
                       }`}
                     />
                     <span className="text-zinc-300 font-mono tabular-nums">
                       {loading.bot ? '...'
-                        : botStatus?.ok ? `${botStatus.lagSeconds ?? botStatus.ageSeconds ?? 0}s`
+                        : botStatus?.ok ? 'online'
                         : 'offline'}
                     </span>
                   </button>
@@ -746,6 +914,35 @@ export default function Page() {
                 <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
                 <span className="hidden sm:inline ml-1.5">Обновить</span>
               </Button>
+
+              {/* Feature 3: Auto-refresh toggle */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-md border border-zinc-800/70 bg-zinc-900/50">
+                    <Switch
+                      checked={autoRefresh}
+                      onCheckedChange={setAutoRefresh}
+                      className="scale-75 origin-center"
+                      aria-label="Авто-обновление"
+                    />
+                    {autoRefresh ? (
+                      <Play className="w-3 h-3 text-amber-400" strokeWidth={1.5} />
+                    ) : (
+                      <Pause className="w-3 h-3 text-zinc-500" strokeWidth={1.5} />
+                    )}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-[240px]">
+                  <div className="text-xs font-mono">
+                    {autoRefresh ? 'Авто-обновление: каждые 30с' : 'Авто-обновление: выключено'}
+                    {lastRefreshTime && (
+                      <div className="text-zinc-400 mt-1">
+                        Обновлено {timeAgo(lastRefreshTime.toISOString())}
+                      </div>
+                    )}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
 
               {/* Export dropdown */}
               <DropdownMenu>
@@ -799,10 +996,10 @@ export default function Page() {
                     role="tab"
                     aria-selected={isActive}
                     onClick={() => setActiveTab(tab.value)}
-                    className={`relative shrink-0 h-11 px-3.5 text-sm font-medium transition-colors active:translate-y-px ${
+                    className={`relative shrink-0 h-11 px-3.5 text-sm font-medium transition-all duration-200 active:translate-y-px rounded-t-md ${
                       isActive
                         ? 'text-amber-400'
-                        : 'text-zinc-500 hover:text-zinc-300'
+                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-amber-500/5'
                     }`}
                   >
                     {tab.label}
@@ -883,23 +1080,28 @@ export default function Page() {
                     </div>
                     <div className="flex items-center gap-3 mb-3">
                       <span
-                        className={`flex h-2.5 w-2.5 rounded-full ${
-                          botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                        className={`flex h-4 w-4 rounded-full ${
+                          botStatus?.ok ? 'bg-emerald-400 animate-heartbeat animate-green-pulse-ring' : 'bg-rose-500/80'
                         }`}
                       />
                       <span className="text-lg font-semibold text-zinc-100">
                         {loading.bot ? '...' : botStatus?.ok ? 'Онлайн' : 'Оффлайн'}
                       </span>
+                      {botStatus?.ok && botStatus?.pollingMode !== 'polling' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono">
+                          Webhook
+                        </span>
+                      )}
                     </div>
                     <div className="space-y-1.5 text-xs font-mono tabular-nums text-zinc-400">
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Аптайм</span>
-                        <span>{botStatus?.uptime != null ? `${Math.floor(botStatus.uptime / 60)}м ${botStatus.uptime % 60}с` : '—'}</span>
+                        <span>{formatUptime(botStatus?.uptime)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Хартбит</span>
                         <span className="truncate ml-2 max-w-[12ch]">
-                          {botStatus?.lastBeatAt ? timeAgo(botStatus.lastBeatAt) : 'нет'}
+                          {botStatus?.lastBeatAt ? relativeTime(botStatus.lastBeatAt) : 'нет'}
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -978,7 +1180,7 @@ export default function Page() {
                     </div>
                   </div>
                   {loading.activity ? (
-                    <Skeleton className="h-40 w-full" />
+                    <div className="animate-shimmer h-40 w-full rounded-lg" />
                   ) : activity.length === 0 ? (
                     <EmptyState
                       icon={Activity}
@@ -995,7 +1197,7 @@ export default function Page() {
                   <p className="text-xs text-zinc-500 mb-4">Что спрашивают чаще</p>
                   <div className="space-y-2.5 max-h-56 overflow-y-auto sofia-scroll pr-1">
                     {loading.stats && Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} className="h-6 w-full" />
+                      <div key={i} className="animate-shimmer h-6 w-full rounded" />
                     ))}
                     {stats?.readingsByType.length === 0 && !loading.stats && (
                       <EmptyState
@@ -1050,7 +1252,9 @@ export default function Page() {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 items-center">
                     <div className="flex justify-center items-center py-1">
-                      <ZodiacWheel counts={zodiacCounts} size={200} />
+                      <div className="animate-spin-slow">
+                        <ZodiacWheel counts={zodiacCounts} size={200} />
+                      </div>
                     </div>
                     <ZodiacBreakdown counts={zodiacCounts} />
                   </div>
@@ -1151,8 +1355,12 @@ export default function Page() {
                           ))}
                         </TableRow>
                       ))}
-                      {!loading.users && users.map((u) => (
-                        <TableRow key={u.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                      {!loading.users && users.map((u, idx) => (
+                        <TableRow
+                          key={u.id}
+                          className={`border-zinc-800/60 hover:bg-zinc-800/30 transition-colors cursor-pointer ${idx % 2 === 0 ? 'bg-zinc-900/30' : ''}`}
+                          onClick={() => { setSelectedUser(u); fetchUserDetail(u.telegramId); }}
+                        >
                           <TableCell className="font-medium text-zinc-100">
                             <div className="flex items-center gap-2.5">
                               <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800/80 text-[10px] font-mono text-zinc-400">
@@ -1366,8 +1574,48 @@ export default function Page() {
                                     <p className="text-sm text-zinc-400 italic">{r.question}</p>
                                   </div>
                                 )}
+                                {/* Feature 5: Cards detail */}
+                                {(() => {
+                                  let parsedCards: { name: string; reversed?: boolean; position?: string }[] = [];
+                                  try { parsedCards = JSON.parse(r.cards) as { name: string; reversed?: boolean; position?: string }[]; } catch { /* ignore */ }
+                                  if (parsedCards.length > 0) {
+                                    return (
+                                      <div>
+                                        <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Карты</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {parsedCards.map((card, i) => (
+                                            <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-zinc-700/70 bg-zinc-800/40">
+                                              <span className="text-zinc-200">{card.name}</span>
+                                              {card.reversed && <span className="text-amber-400 text-[10px]">↻</span>}
+                                              {card.position && <span className="text-zinc-500 text-[10px]">({card.position})</span>}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                                 <div>
-                                  <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Полная интерпретация</p>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <p className="text-[11px] uppercase tracking-wider text-zinc-500">Полная интерпретация</p>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 text-zinc-500 hover:text-amber-400"
+                                          onClick={() => {
+                                            navigator.clipboard.writeText(r.interpretation);
+                                            toast.success('Интерпретация скопирована');
+                                          }}
+                                        >
+                                          <Copy className="w-3 h-3" strokeWidth={1.5} />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Копировать текст</TooltipContent>
+                                    </Tooltip>
+                                  </div>
                                   <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{r.interpretation}</p>
                                 </div>
                               </div>
@@ -1708,8 +1956,8 @@ export default function Page() {
                               ))}
                             </TableRow>
                           ))}
-                          {!loading.economy && economy.transactions.map((tx) => (
-                            <TableRow key={tx.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                          {!loading.economy && economy.transactions.map((tx, idx) => (
+                            <TableRow key={tx.id} className={`border-zinc-800/60 hover:bg-zinc-800/30 transition-colors ${idx % 2 === 0 ? 'bg-zinc-900/30' : ''}`}>
                               <TableCell className="text-zinc-200 text-sm">
                                 {tx.user.name ?? tx.user.firstName ?? tx.user.username ?? '-'}
                               </TableCell>
@@ -1924,15 +2172,52 @@ export default function Page() {
                   <p className="text-[11px] text-zinc-500 max-w-[60ch] leading-relaxed">
                     Команда отправляется в очередь <code className="text-amber-400/80">BotCommand</code>. Бот берёт её в течение ~2 секунд.
                   </p>
-                  <Button
-                    onClick={sendBroadcast}
-                    disabled={sending || !broadcastText.trim()}
-                    className="bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
-                  >
-                    <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
-                    {sending ? 'Постановка в очередь...' : 'Поставить в очередь'}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={testBroadcastToMe}
+                      disabled={testingBroadcast || !broadcastText.trim()}
+                      className="h-8 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400 active:translate-y-px disabled:opacity-40"
+                    >
+                      <MailCheck className={`w-3.5 h-3.5 mr-1.5 ${testingBroadcast ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+                      Тест мне
+                    </Button>
+                    <Button
+                      onClick={sendBroadcast}
+                      disabled={sending || !broadcastText.trim()}
+                      className="bg-amber-500 text-zinc-950 hover:bg-amber-400 active:translate-y-px disabled:opacity-40 shadow-sm shadow-amber-500/20"
+                    >
+                      <Send className={`w-4 h-4 mr-2 ${sending ? 'animate-pulse' : ''}`} strokeWidth={1.5} />
+                      {sending ? 'Постановка в очередь...' : 'Поставить в очередь'}
+                    </Button>
+                  </div>
                 </div>
+
+                {/* Feature 4: Broadcast Preview */}
+                {broadcastText.trim() && (
+                  <div className="mt-4 pt-4 border-t border-zinc-800/70 space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-3">
+                        <span className="text-zinc-500">Символов: <span className="font-mono tabular-nums text-zinc-300">{broadcastText.length}</span></span>
+                        <span className="text-zinc-500">Получателей: <span className="font-mono tabular-nums text-amber-400">{fmtNum(stats?.users.total ?? 0)}</span></span>
+                      </div>
+                      {broadcastText.length > 800 && (
+                        <span className="text-amber-400 text-[11px]">⚠️ Длинное сообщение</span>
+                      )}
+                    </div>
+                    {/* Telegram-style preview bubble */}
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] bg-[#1c2840] rounded-2xl rounded-tl-sm px-4 py-3 border border-zinc-700/30">
+                        <div className="text-xs text-sky-400 font-semibold mb-1.5">Sofia ✨</div>
+                        <p className="text-sm text-zinc-100 whitespace-pre-wrap leading-relaxed break-words">{broadcastText}</p>
+                        <div className="text-[10px] text-zinc-500 text-right mt-1.5 font-mono tabular-nums">
+                          {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </BentoTile>
 
               <BentoTile>
@@ -2015,8 +2300,8 @@ export default function Page() {
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                   <div className="flex items-center gap-3">
                     <span
-                      className={`flex h-3 w-3 rounded-full ${
-                        botStatus?.ok ? 'bg-amber-400 sofia-pulse-dot' : 'bg-rose-400'
+                      className={`flex h-4 w-4 rounded-full ${
+                        botStatus?.ok ? 'bg-emerald-400 animate-heartbeat animate-green-pulse-ring' : 'bg-rose-500/80'
                       }`}
                     />
                     <div>
@@ -2025,10 +2310,15 @@ export default function Page() {
                       </div>
                       <div className="text-[11px] text-zinc-500 font-mono">
                         {botStatus?.lastBeatAt
-                          ? `Heartbeat ${timeAgo(botStatus.lastBeatAt)}`
+                          ? `Heartbeat ${relativeTime(botStatus.lastBeatAt)}`
                           : 'Бот ещё не запускался (или не подключён к БД)'}
                       </div>
                     </div>
+                    {botStatus?.ok && botStatus?.pollingMode !== 'polling' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono">
+                        Webhook
+                      </span>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5 text-[11px] font-mono tabular-nums">
                     <div>
@@ -2042,7 +2332,7 @@ export default function Page() {
                     <div>
                       <div className="text-zinc-500 uppercase tracking-wider">Аптайм</div>
                       <div className="text-zinc-300">
-                        {botStatus?.uptime != null ? `${Math.floor(botStatus.uptime / 60)}м ${botStatus.uptime % 60}с` : '—'}
+                        {formatUptime(botStatus?.uptime)}
                       </div>
                     </div>
                     <div>
@@ -2053,13 +2343,191 @@ export default function Page() {
                 </div>
               </BentoTile>
 
+              {/* Feature 6: Command Queue Pipeline */}
+              {commands.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {(() => {
+                    const pending = commands.filter((c) => c.status === 'pending').length;
+                    const processing = commands.filter((c) => c.status === 'processing').length;
+                    const done = commands.filter((c) => c.status === 'done').length;
+                    const failed = commands.filter((c) => c.status === 'failed').length;
+                    return (
+                      <>
+                        <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 flex items-center gap-3">
+                          <div className="flex items-center justify-center h-8 w-8 rounded-md bg-zinc-800/60">
+                            <Timer className="w-4 h-4 text-zinc-400" strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <div className="text-lg font-mono tabular-nums font-semibold text-zinc-100">{pending}</div>
+                            <div className="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                              {pending > 0 && <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 sofia-pulse-dot" />}
+                              В очереди
+                            </div>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 flex items-center gap-3">
+                          <div className="flex items-center justify-center h-8 w-8 rounded-md bg-amber-500/10">
+                            <Radio className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <div className="text-lg font-mono tabular-nums font-semibold text-zinc-100">{processing}</div>
+                            <div className="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                              {processing > 0 && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 sofia-pulse-dot" />}
+                              Выполняется
+                            </div>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 flex items-center gap-3">
+                          <div className="flex items-center justify-center h-8 w-8 rounded-md bg-emerald-500/10">
+                            <CircleCheck className="w-4 h-4 text-emerald-400" strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <div className="text-lg font-mono tabular-nums font-semibold text-zinc-100">{done}</div>
+                            <div className="text-[11px] text-zinc-500">Готово</div>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 flex items-center gap-3">
+                          <div className="flex items-center justify-center h-8 w-8 rounded-md bg-rose-500/10">
+                            <AlertTriangle className="w-4 h-4 text-rose-400" strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <div className="text-lg font-mono tabular-nums font-semibold text-zinc-100">{failed}</div>
+                            <div className="text-[11px] text-zinc-500">Ошибки</div>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Feature 6: Command types distribution */}
+              {commands.length > 0 && (
+                <BentoTile>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Activity className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Распределение команд</h3>
+                  </div>
+                  <div className="space-y-2.5">
+                    {(() => {
+                      const typeCounts: Record<string, number> = {};
+                      for (const c of commands) {
+                        typeCounts[c.type] = (typeCounts[c.type] ?? 0) + 1;
+                      }
+                      const sorted = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+                      const maxCount = sorted[0]?.[1] ?? 1;
+                      return sorted.map(([type, count]) => (
+                        <MiniBar
+                          key={type}
+                          label={COMMAND_TYPE_LABELS[type] ?? type}
+                          value={count}
+                          max={maxCount}
+                          display={String(count)}
+                          color="bg-amber-500/70"
+                        />
+                      ));
+                    })()}
+                  </div>
+                </BentoTile>
+              )}
+
+              {/* Feature 1: Webhook Settings */}
+              <BentoTile>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <h3 className="text-sm font-semibold text-zinc-100">Webhook</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={fetchWebhookStatus}
+                      disabled={webhookLoading}
+                      className="h-7 border-zinc-800/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400 active:translate-y-px disabled:opacity-40"
+                    >
+                      <RefreshCw className={`w-3 h-3 mr-1 ${webhookLoading ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+                      Проверить
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={setupWebhook}
+                      disabled={webhookSetupLoading}
+                      className="h-7 border-amber-500/40 bg-amber-500/5 text-amber-400 hover:bg-amber-500/10 active:translate-y-px disabled:opacity-40"
+                    >
+                      <Link2 className="w-3 h-3 mr-1" strokeWidth={1.5} />
+                      {webhookSetupLoading ? 'Установка…' : 'Настроить'}
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-wider text-zinc-500">URL</div>
+                    <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+                      <span className="text-xs font-mono text-zinc-300 truncate max-w-[40ch]">
+                        {webhookInfo?.webhook?.url || botStatus?.webhook?.url || 'не настроен'}
+                      </span>
+                      {(webhookInfo?.webhook?.url || botStatus?.webhook?.url) && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-zinc-500 hover:text-amber-400"
+                              onClick={() => {
+                                navigator.clipboard.writeText(webhookInfo?.webhook?.url || botStatus?.webhook?.url || '');
+                                toast.success('URL скопирован');
+                              }}
+                            >
+                              <Copy className="w-3 h-3" strokeWidth={1.5} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Копировать URL</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-wider text-zinc-500">Статус</div>
+                    <span className="inline-flex items-center gap-1.5 text-xs">
+                      <span className={`h-1.5 w-1.5 rounded-full ${(webhookInfo?.webhook?.url || botStatus?.webhook?.url) ? 'bg-emerald-400' : 'bg-zinc-500'}`} />
+                      <span className={(webhookInfo?.webhook?.url || botStatus?.webhook?.url) ? 'text-emerald-400' : 'text-zinc-500'}>
+                        {(webhookInfo?.webhook?.url || botStatus?.webhook?.url) ? 'Активен' : 'Не настроен'}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-wider text-zinc-500">Очередь обновлений</div>
+                    <span className="text-xs font-mono tabular-nums text-zinc-300">
+                      {webhookInfo?.webhook?.pending_update_count ?? botStatus?.webhook?.pending_update_count ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-wider text-zinc-500">Последняя ошибка</div>
+                    <span className="text-xs font-mono text-zinc-400 truncate max-w-[30ch]">
+                      {webhookInfo?.webhook?.last_error_message || botStatus?.webhook?.last_error_message || '—'}
+                    </span>
+                  </div>
+                  {webhookInfo?.webhook?.max_connections != null && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[11px] uppercase tracking-wider text-zinc-500">Макс. соединений</div>
+                      <span className="text-xs font-mono tabular-nums text-zinc-300">
+                        {webhookInfo.webhook.max_connections}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </BentoTile>
+
               {/* Command center grid */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Direct message */}
-                <BentoTile>
+                <BentoTile className="border-l-2 border-l-amber-500/50">
                   <div className="flex items-center gap-2 mb-4">
                     <Mail className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
                     <h3 className="text-sm font-semibold text-zinc-100">Личное сообщение</h3>
+                    <span className="text-[10px] text-zinc-500 font-mono ml-auto">dm</span>
                   </div>
                   <div className="space-y-3">
                     <Input
@@ -2088,10 +2556,11 @@ export default function Page() {
                 </BentoTile>
 
                 {/* Gift crystals */}
-                <BentoTile>
+                <BentoTile className="border-l-2 border-l-emerald-500/50">
                   <div className="flex items-center gap-2 mb-4">
-                    <Gift className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <Gift className="w-4 h-4 text-emerald-400" strokeWidth={1.5} />
                     <h3 className="text-sm font-semibold text-zinc-100">Подарить кристаллы</h3>
+                    <span className="text-[10px] text-zinc-500 font-mono ml-auto">gift</span>
                   </div>
                   <div className="space-y-3">
                     <Input
@@ -2143,10 +2612,11 @@ export default function Page() {
                 </BentoTile>
 
                 {/* Ban / Unban */}
-                <BentoTile>
+                <BentoTile className="border-l-2 border-l-rose-500/50">
                   <div className="flex items-center gap-2 mb-4">
-                    <ShieldCheck className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <ShieldCheck className="w-4 h-4 text-rose-400" strokeWidth={1.5} />
                     <h3 className="text-sm font-semibold text-zinc-100">Бан / разбан пользователя</h3>
+                    <span className="text-[10px] text-zinc-500 font-mono ml-auto">moderation</span>
                   </div>
                   <div className="space-y-3">
                     <Input
@@ -2178,10 +2648,11 @@ export default function Page() {
                 </BentoTile>
 
                 {/* System controls */}
-                <BentoTile>
+                <BentoTile className="border-l-2 border-l-zinc-500/50">
                   <div className="flex items-center gap-2 mb-4">
-                    <ServerCog className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                    <ServerCog className="w-4 h-4 text-zinc-400" strokeWidth={1.5} />
                     <h3 className="text-sm font-semibold text-zinc-100">Системные команды</h3>
+                    <span className="text-[10px] text-zinc-500 font-mono ml-auto">system</span>
                   </div>
                   <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
                     Операции с самим ботом: перезагрузка конфигурации и остановка. Выполняются на стороне Python-бота.
@@ -2272,7 +2743,7 @@ export default function Page() {
                             </TableCell>
                           </TableRow>
                         )}
-                        {commands.map((c) => {
+                        {commands.map((c, idx) => {
                           const sb = commandStatusBadge(c.status);
                           let payloadSummary = '';
                           try {
@@ -2292,7 +2763,7 @@ export default function Page() {
                             }
                           }
                           return (
-                            <TableRow key={c.id} className="border-zinc-800/60 hover:bg-zinc-900/40 transition-colors">
+                            <TableRow key={c.id} className={`border-zinc-800/60 hover:bg-zinc-800/30 transition-colors ${idx % 2 === 0 ? 'bg-zinc-900/30' : ''}`}>
                               <TableCell>
                                 <span className="text-xs font-mono text-zinc-200">
                                   {COMMAND_TYPE_LABELS[c.type] ?? c.type}
@@ -2300,13 +2771,11 @@ export default function Page() {
                               </TableCell>
                               <TableCell>
                                 <span className={`text-[11px] font-mono inline-flex items-center gap-1.5 ${sb.color}`}>
-                                  <span className={`h-1.5 w-1.5 rounded-full ${
-                                    c.status === 'pending' ? 'bg-zinc-500' :
-                                    c.status === 'processing' ? 'bg-amber-400 sofia-pulse-dot' :
-                                    c.status === 'done' ? 'bg-emerald-400' :
-                                    'bg-rose-400'
-                                  }`} />
-                                  {sb.label}
+                                  {c.status === 'done' && <span className="text-emerald-400">✓</span>}
+                                  {c.status === 'pending' && <span className="text-zinc-500">⏳</span>}
+                                  {c.status === 'processing' && <span className="text-amber-400 sofia-pulse-dot">⏳</span>}
+                                  {c.status === 'failed' && <span className="text-rose-400">✗</span>}
+                                  {' '}{sb.label}
                                 </span>
                               </TableCell>
                               <TableCell className="text-zinc-500 text-xs font-mono truncate max-w-48">
@@ -2488,22 +2957,267 @@ export default function Page() {
           )}
         </main>
 
+        {/* Feature 2: User Detail Modal */}
+        <Dialog open={userDetailOpen} onOpenChange={(open) => { setUserDetailOpen(open); if (!open) { setUserDetail(null); setSelectedUser(null); } }}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 max-w-2xl max-h-[85vh] overflow-y-auto sofia-scroll">
+            <DialogHeader>
+              <DialogTitle className="text-zinc-100 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800/80 text-sm font-mono text-zinc-400">
+                  {(selectedUser?.name ?? selectedUser?.firstName ?? '?').slice(0, 1).toUpperCase()}
+                </div>
+                {selectedUser?.name ?? selectedUser?.firstName ?? 'Пользователь'}
+              </DialogTitle>
+              <DialogDescription className="text-zinc-500 font-mono text-xs">
+                @{selectedUser?.username ?? selectedUser?.telegramId ?? '—'}
+              </DialogDescription>
+            </DialogHeader>
+
+            {userDetailLoading ? (
+              <div className="space-y-3 py-4">
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-32 w-full" />
+              </div>
+            ) : userDetail ? (
+              <Tabs defaultValue="profile" className="w-full">
+                <TabsList className="bg-zinc-800/50 w-full">
+                  <TabsTrigger value="profile" className="text-xs flex-1 data-[state=active]:text-amber-400">Профиль</TabsTrigger>
+                  <TabsTrigger value="readings" className="text-xs flex-1 data-[state=active]:text-amber-400">Расклады</TabsTrigger>
+                  <TabsTrigger value="transactions" className="text-xs flex-1 data-[state=active]:text-amber-400">Транзакции</TabsTrigger>
+                  <TabsTrigger value="memory" className="text-xs flex-1 data-[state=active]:text-amber-400">Память</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="profile" className="space-y-4 mt-4">
+                  {/* Quick stats */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 text-center">
+                      <div className="text-xl font-mono tabular-nums font-semibold text-amber-400">{userDetail.user.crystals}</div>
+                      <div className="text-[11px] text-zinc-500">Кристаллы</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 text-center">
+                      <div className="text-xl font-mono tabular-nums font-semibold text-zinc-100 flex items-center justify-center gap-1">
+                        <Flame className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                        {userDetail.user.streakDays}
+                      </div>
+                      <div className="text-[11px] text-zinc-500">Серия</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-3 text-center">
+                      <div className="text-xl font-mono tabular-nums font-semibold text-zinc-100">{userDetail.user.messageCount}</div>
+                      <div className="text-[11px] text-zinc-500">Сообщений</div>
+                    </div>
+                  </div>
+
+                  {/* Profile details */}
+                  <div className="space-y-2.5 text-xs">
+                    {userDetail.user.zodiacSign && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Знак зодиака</span>
+                        <span className="text-zinc-200">{ZODIAC_EMOJI[userDetail.user.zodiacSign] ?? ''} {userDetail.user.zodiacSign}</span>
+                      </div>
+                    )}
+                    {userDetail.user.subscriptionType && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Подписка</span>
+                        <span className="text-amber-400 flex items-center gap-1">
+                          <Crown className="w-3 h-3" strokeWidth={1.5} />
+                          {userDetail.user.subscriptionType}
+                          {userDetail.user.subscriptionUntil && ` до ${new Date(userDetail.user.subscriptionUntil).toLocaleDateString('ru-RU')}`}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-500">Язык</span>
+                      <span className="text-zinc-300">{userDetail.user.language === 'en' ? 'EN' : 'RU'}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-500">Онбординг</span>
+                      <span className={userDetail.user.onboardingCompleted ? 'text-emerald-400' : 'text-zinc-400'}>
+                        {userDetail.user.onboardingCompleted ? 'Завершён' : userDetail.user.onboardingStep}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-500">Заблокирован</span>
+                      <span className={userDetail.user.isBlocked ? 'text-rose-400' : 'text-emerald-400'}>
+                        {userDetail.user.isBlocked ? 'Да' : 'Нет'}
+                      </span>
+                    </div>
+                    {userDetail.user.isAdmin && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500">Админ</span>
+                        <span className="text-amber-400">Да</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-500">Был в сети</span>
+                      <span className="text-zinc-300 font-mono tabular-nums">{timeAgo(userDetail.user.lastSeenAt)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-500">Регистрация</span>
+                      <span className="text-zinc-300 font-mono tabular-nums">{timeAgo(userDetail.user.createdAt)}</span>
+                    </div>
+                  </div>
+
+                  {/* Stats row */}
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800/70 text-[11px] text-center">
+                    <div><span className="font-mono tabular-nums text-zinc-200">{userDetail.stats.conversations}</span><br /><span className="text-zinc-500">Диалогов</span></div>
+                    <div><span className="font-mono tabular-nums text-zinc-200">{userDetail.stats.readings}</span><br /><span className="text-zinc-500">Раскладов</span></div>
+                    <div><span className="font-mono tabular-nums text-zinc-200">{userDetail.stats.memories}</span><br /><span className="text-zinc-500">Памятей</span></div>
+                  </div>
+
+                  {/* Referral info */}
+                  {(userDetail.referrer || userDetail.stats.referrals > 0) && (
+                    <div className="pt-2 border-t border-zinc-800/70 space-y-2">
+                      <div className="text-[11px] uppercase tracking-wider text-zinc-500">Рефералы</div>
+                      {userDetail.referrer && (
+                        <div className="text-xs text-zinc-400">
+                          Пригласил: <span className="text-zinc-200">{userDetail.referrer.name ?? userDetail.referrer.firstName ?? 'Аноним'}</span>
+                          {userDetail.referrer.username && <span className="text-zinc-500"> @{userDetail.referrer.username}</span>}
+                        </div>
+                      )}
+                      <div className="text-xs text-zinc-400">
+                        Приглашено: <span className="font-mono tabular-nums text-amber-400">{userDetail.stats.referrals}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quick actions */}
+                  <div className="pt-2 border-t border-zinc-800/70 space-y-2">
+                    <div className="text-[11px] uppercase tracking-wider text-zinc-500">Быстрые действия</div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 border-amber-500/40 bg-amber-500/5 text-amber-400 hover:bg-amber-500/10 text-xs"
+                        onClick={() => {
+                          enqueueCommand('gift_modal', 'gift_crystals', { telegramId: userDetail.user.telegramId, amount: 5 }, '+5 кристаллов поставлено в очередь');
+                        }}
+                      >
+                        <Gift className="w-3 h-3 mr-1" strokeWidth={1.5} /> +5 💎
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={`h-7 text-xs ${userDetail.user.isBlocked ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-400 hover:bg-emerald-500/10' : 'border-rose-500/40 bg-rose-500/5 text-rose-400 hover:bg-rose-500/10'}`}
+                        onClick={() => {
+                          const type = userDetail.user.isBlocked ? 'unban' : 'ban';
+                          enqueueCommand(type, type, { telegramId: userDetail.user.telegramId }, `${type === 'ban' ? 'Бан' : 'Разбан'} поставлен в очередь`);
+                        }}
+                      >
+                        {userDetail.user.isBlocked ? <ShieldCheck className="w-3 h-3 mr-1" strokeWidth={1.5} /> : <UserX className="w-3 h-3 mr-1" strokeWidth={1.5} />}
+                        {userDetail.user.isBlocked ? 'Разбанить' : 'Забанить'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 border-zinc-700/70 bg-zinc-900/50 text-zinc-300 hover:text-amber-400 text-xs"
+                        onClick={() => { window.open(`https://t.me/${userDetail.user.username ?? userDetail.user.telegramId}`, '_blank'); }}
+                      >
+                        <MessageSquare className="w-3 h-3 mr-1" strokeWidth={1.5} /> Написать
+                      </Button>
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="readings" className="mt-4">
+                  <div className="space-y-2 max-h-64 overflow-y-auto sofia-scroll">
+                    {userDetail.readings.length === 0 ? (
+                      <div className="text-xs text-zinc-500 py-4 text-center">Раскладов пока нет</div>
+                    ) : (
+                      userDetail.readings.slice(0, 5).map((r) => (
+                        <div key={r.id} className="rounded-md border border-zinc-800/60 bg-zinc-900/40 p-2.5">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <Badge variant="outline" className="border-zinc-700/70 text-zinc-300 text-[10px]">
+                              {READING_LABELS[r.type] ?? r.type}
+                            </Badge>
+                            <span className="text-[10px] text-zinc-500 font-mono tabular-nums">{timeAgo(r.createdAt)}</span>
+                          </div>
+                          {r.question && <p className="text-xs text-zinc-400 italic mb-1">«{r.question}»</p>}
+                          <p className="text-xs text-zinc-300 line-clamp-3">{r.interpretation}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="transactions" className="mt-4">
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto sofia-scroll">
+                    {userDetail.transactions.length === 0 ? (
+                      <div className="text-xs text-zinc-500 py-4 text-center">Транзакций пока нет</div>
+                    ) : (
+                      userDetail.transactions.slice(0, 5).map((tx) => (
+                        <div key={tx.id} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-zinc-900/40">
+                          <div>
+                            <span className="text-xs text-zinc-300">{TX_TYPE_LABELS[tx.type] ?? tx.type}</span>
+                            {tx.description && <span className="text-[11px] text-zinc-500 ml-1.5">{tx.description}</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-mono tabular-nums ${tx.amount >= 0 ? 'text-amber-400' : 'text-zinc-400'}`}>
+                              {tx.amount >= 0 ? '+' : ''}{tx.amount}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 font-mono">{timeAgo(tx.createdAt)}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="memory" className="mt-4">
+                  <div className="space-y-2 max-h-64 overflow-y-auto sofia-scroll">
+                    {userDetail.memories.length === 0 ? (
+                      <div className="text-xs text-zinc-500 py-4 text-center">София пока ничего не запомнила</div>
+                    ) : (
+                      userDetail.memories.map((m) => (
+                        <div key={m.id} className="rounded-md border border-zinc-800/60 bg-zinc-900/40 p-2.5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <Badge variant="outline" className="border-zinc-700/70 text-zinc-400 text-[10px]">
+                              {m.kind === 'fact' ? '📋' : '💭'} {m.category}
+                            </Badge>
+                            <span className="text-[10px] text-zinc-600">важность: {m.importance}</span>
+                          </div>
+                          <p className="text-xs text-zinc-300">{m.content}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
         {/* ─── Sticky footer ───────────────────────────────────── */}
-        <footer className="mt-auto border-t border-zinc-800/60 bg-zinc-950">
-          <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-4 flex items-center justify-between gap-4 flex-wrap">
+        <footer className="mt-auto border-t border-zinc-800/60 bg-gradient-to-b from-zinc-950 to-zinc-900/80">
+          <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-5 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3 text-xs text-zinc-500">
-              <span className="text-zinc-300 font-medium">Sofia Bot Admin</span>
-              <span className="text-zinc-700">/</span>
-              <span className="font-mono tabular-nums">v2.0</span>
+              <Moon className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
+              <span className="text-zinc-300 font-medium">Sofia Bot</span>
+              <span className="text-zinc-700">·</span>
+              <span className="font-mono tabular-nums">v1.0</span>
+              <span className="text-zinc-700">·</span>
+              <span className="inline-flex items-center gap-1 text-zinc-400">
+                <span className={`h-1.5 w-1.5 rounded-full ${botStatus?.ok ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                {botStatus?.pollingMode !== 'polling' ? 'Webhook' : 'Polling'}
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span>Vercel</span>
             </div>
             <div className="flex items-center gap-4 text-xs text-zinc-500">
+              <a
+                href="https://github.com/nicholasgriffintn/sofia-bot"
+                target="_blank"
+                rel="noreferrer"
+                className="text-zinc-400 hover:text-amber-400 active:translate-y-px transition-colors inline-flex items-center gap-1.5"
+              >
+                GitHub <ExternalLink className="w-3 h-3" strokeWidth={1.5} />
+              </a>
               <a
                 href="https://t.me/oracultetris_bot"
                 target="_blank"
                 rel="noreferrer"
-                className="text-amber-400 hover:text-amber-300 active:translate-y-px transition-colors font-mono"
+                className="text-amber-400 hover:text-amber-300 active:translate-y-px transition-colors font-mono inline-flex items-center gap-1.5"
               >
-                @oracultetris_bot
+                @oracultetris_bot <Send className="w-3 h-3" strokeWidth={1.5} />
               </a>
             </div>
           </div>
@@ -2606,13 +3320,15 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
           <span className="text-zinc-500">макс. сообщений</span>
           <span className="text-zinc-400">{fmtNum(maxMsgs)}</span>
         </div>
-        <div className="flex items-end gap-1 h-32">
+        <div className="relative flex items-end gap-1 h-32">
+          {/* Gradient fill under the bars */}
+          <div className="absolute inset-0 bg-gradient-to-t from-amber-500/10 to-transparent rounded-b pointer-events-none" />
           {buckets.map((b) => {
             const h = (b.messages / maxMsgs) * 100;
             return (
               <Tooltip key={b.date}>
                 <TooltipTrigger asChild>
-                  <div className="flex-1 group cursor-pointer">
+                  <div className="flex-1 group cursor-pointer relative z-10">
                     <div
                       className="w-full rounded-t bg-amber-500/70 group-hover:bg-amber-400 transition-colors"
                       style={{ height: `${Math.max(2, h)}%` }}
@@ -2638,11 +3354,12 @@ function ActivityChart({ buckets }: { buckets: ActivityBucket[] }) {
           <span className="text-zinc-500">макс. раскладов</span>
           <span className="text-zinc-400">{fmtNum(maxReadings)}</span>
         </div>
-        <div className="flex items-end gap-1 h-12">
+        <div className="relative flex items-end gap-1 h-12">
+          <div className="absolute inset-0 bg-gradient-to-t from-amber-500/5 to-transparent rounded-b pointer-events-none" />
           {buckets.map((b) => {
             const h = (b.readings / maxReadings) * 100;
             return (
-              <div key={b.date} className="flex-1">
+              <div key={b.date} className="flex-1 relative z-10">
                 <div
                   className="w-full rounded-t bg-amber-500/30 hover:bg-amber-400/60 transition-colors"
                   style={{ height: `${Math.max(2, h)}%` }}

@@ -24,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ tele
       return NextResponse.json({ error: 'user not found' }, { status: 404 });
     }
 
-    const [readings, transactions, conversations, referralCount, memoriesCount] = await Promise.all([
+    const [readings, transactions, conversations, referralCount, memoriesCount, memories] = await Promise.all([
       db.reading.findMany({
         where: { userId: user.id },
         orderBy: { createdAt: 'desc' },
@@ -40,6 +40,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ tele
       db.conversation.count({ where: { userId: user.id } }),
       db.referral.count({ where: { referrerId: user.id } }),
       db.memory.count({ where: { userId: user.id } }),
+      db.memory.findMany({
+        where: { userId: user.id },
+        orderBy: { importance: 'desc' },
+        take: 20,
+        select: { id: true, kind: true, category: true, content: true, importance: true, createdAt: true },
+      }),
     ]);
 
     // Who referred this user (if anyone).
@@ -65,6 +71,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ tele
       },
       readings,
       transactions,
+      memories,
       referrer,
     });
   } catch (e: unknown) {

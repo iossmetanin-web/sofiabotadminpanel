@@ -68,7 +68,7 @@ export function BentoTile({
       className={cn(
         'relative rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5',
         'shadow-sm shadow-black/40',
-        interactive && 'transition-colors hover:border-zinc-700/80',
+        interactive && 'transition-all duration-300 hover:border-amber-500/30 hover:scale-[1.02] hover:shadow-md hover:shadow-amber-500/5',
         span,
         className,
       )}
@@ -193,10 +193,10 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-14 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/5 mb-3">
-        <Icon className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-amber-500/5 mb-4 shadow-sm shadow-amber-500/10">
+        <Icon className="w-5 h-5 text-amber-400" strokeWidth={1.5} />
       </div>
-      <p className="text-sm font-medium text-zinc-200 mb-1">{title}</p>
+      <p className="text-sm font-medium text-zinc-200 mb-1.5">{title}</p>
       {description && (
         <p className="text-xs text-zinc-500 max-w-[44ch] leading-relaxed mb-4">
           {description}
@@ -205,9 +205,9 @@ export function EmptyState({
       {action && onAction && (
         <button
           onClick={onAction}
-          className="text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors active:translate-y-px"
+          className="text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors active:translate-y-px mt-1 inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 hover:border-amber-500/40"
         >
-          {action} →
+          {action} <span className="text-amber-500/70">→</span>
         </button>
       )}
     </div>
