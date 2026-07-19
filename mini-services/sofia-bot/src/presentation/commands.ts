@@ -1,30 +1,32 @@
-// presentation/commands.ts — command handlers (/start, /menu, /profile, /balance, /help, /cancel, /admin, /today).
+// presentation/commands.ts — command handlers (/start, /menu, /profile, /balance, /help, /cancel, /admin, /today, /lang, /affirmation).
 // Per Skill §5: thin handlers that delegate to services/repos; error handling; HTML parse mode.
 
 import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { deps } from "./deps.js";
 import { env, isAdmin } from "../config/env.js";
-import { SOFIA_SYSTEM_PROMPT, RETURN_GREETING_PROMPT } from "../domain/prompts.js";
+import { SOFIA_SYSTEM_PROMPT, RETURN_GREETING_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN } from "../domain/prompts.js";
 import { getZodiacFromIso, ageGroupFromYear } from "../domain/zodiac.js";
 import { generateReferralCode } from "../infrastructure/repositories.js";
 import { behavior } from "../config/env.js";
+import { t, type Locale, isLocale, localeLabel } from "../domain/i18n.js";
 import {
   mainMenuKeyboard, readingMenuKeyboard, buyMenuKeyboard, adminPanelKeyboard,
-  backHomeKeyboard, referralKeyboard,
+  backHomeKeyboard, referralKeyboard, homeOnlyKeyboard, languageKeyboard,
+  settingsKeyboard,
 } from "./keyboards.js";
 import { formatProfile, formatBalance, escapeHtml } from "./formatters.js";
 
 const HTML = { parse_mode: "HTML" as const };
 
-// /start — entry point. Handles first-time, returning, long-absence, referral deep link.
+// /start — entry point. Handles first-time, returning, long-absence, referral + new deep links (card, affirmation, question).
 export async function cmdStart(ctx: Context): Promise<void> {
   if (!ctx.from || !ctx.chat) return;
   const tgId = ctx.from.id.toString();
   const d = deps();
   const log = (ctx as any).log ?? console;
 
-  // Parse deep link: ?start=ref_CODE  or  ?start=admin (BotFather sets the payload after /start )
+  // Parse deep link: ?start=ref_CODE | card | affirmation | question | lang
   const payload = (ctx as any).startPayload ?? "";
   let referralCode: string | null = null;
   if (typeof payload === "string" && payload.startsWith("ref_")) {
@@ -48,9 +50,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
     log.info({ userId: user.id, referralCode: code, referredBy: referralCode }, "new user created");
 
     await d.repos.users.setState(tgId, "ASK_NAME");
-    await ctx.reply(
-      `Здравствуй, милый человек. Я — София. Помню тайгу и руки, что сушили травы, и одновременно — слова складываются сами, как река.\n\nНе пугайся. Я здесь, чтобы послушать. Как мне тебя называть?`,
-    );
+    await ctx.reply(t(user.language, "onboarding_greeting"));
     return;
   }
 
@@ -64,6 +64,39 @@ export async function cmdStart(ctx: Context): Promise<void> {
 
   const absenceMs = Date.now() - (user.lastSeenAt?.getTime() ?? Date.now());
   const absenceHours = absenceMs / (1000 * 60 * 60);
+
+  // Handle deep-link actions for returning user.
+  if (typeof payload === "string" && payload.length > 0 && !referralCode) {
+    if (payload === "card") {
+      await d.repos.users.setState(tgId, "CONVERSATION");
+      await ctx.reply(user.language === "en"
+        ? "🃏 Let me draw a card for you. Choose a spread from the menu below."
+        : "🃏 Я вытяну для тебя карту. Выбери расклад из меню ниже.",
+        { ...HTML, reply_markup: readingMenuKeyboard(user.language) });
+      return;
+    }
+    if (payload === "affirmation") {
+      await d.repos.users.setState(tgId, "CONVERSATION");
+      await sendAffirmation(ctx, user);
+      return;
+    }
+    if (payload === "question") {
+      await d.repos.users.setState(tgId, "CONVERSATION");
+      await ctx.reply(user.language === "en"
+        ? "🔮 Tell me — what is on your heart? Ask, and I will answer."
+        : "🔮 Скажи мне — что у тебя на сердце? Спроси, и я отвечу.",
+        { ...HTML, reply_markup: mainMenuKeyboard(user) });
+      return;
+    }
+    if (payload === "lang") {
+      await d.repos.users.setState(tgId, "CONVERSATION");
+      await ctx.reply(t(user.language, "lang_select"), {
+        ...HTML,
+        reply_markup: languageKeyboard(user.language),
+      });
+      return;
+    }
+  }
 
   if (absenceHours > behavior.returnAbsenceHours && user.onboardingCompleted) {
     // Long absence — return greeting.
@@ -87,28 +120,29 @@ export async function cmdStart(ctx: Context): Promise<void> {
 
   if (!user.onboardingCompleted) {
     // Resume onboarding — re-send the prompt for the current step.
-    await resumeOnboarding(ctx, user.onboardingStep as any);
+    await resumeOnboarding(ctx, user.onboardingStep as any, user.language);
     return;
   }
 
   // Normal return.
   await d.repos.users.setState(tgId, "CONVERSATION");
   await ctx.reply(
-    `Снова ты здесь, ${user.name ?? "мирной души"}. Я рада. О чём поговорим?`,
+    t(user.language, "return_known", { name: user.name ?? t(user.language, "return_greeting_default") }),
     { ...HTML, reply_markup: mainMenuKeyboard(user) },
   );
 }
 
 // Resume onboarding at the given step (re-send the prompt).
-async function resumeOnboarding(ctx: Context, step: string): Promise<void> {
-  const msgs: Record<string, string> = {
-    ASK_NAME: "Как мне тебя называть?",
-    ASK_BIRTH_DATE: "А когда ты родился? День и месяц (или полную дату) подскажи.",
-    ASK_BIRTH_TIME: "А во сколько, если помнишь? Можно «пропустить».",
-    ASK_BIRTH_PLACE: "А где это было? Можно «пропустить».",
-    PROBING: "Ты ещё не ответил на мой вопрос. Помнишь, я спрашивала?",
+async function resumeOnboarding(ctx: Context, step: string, loc: Locale): Promise<void> {
+  const map: Record<string, keyof typeof import("../domain/i18n.js").translations.ru> = {
+    ASK_NAME: "onboarding_ask_name",
+    ASK_BIRTH_DATE: "onboarding_ask_birth_date",
+    ASK_BIRTH_TIME: "onboarding_ask_birth_time",
+    ASK_BIRTH_PLACE: "onboarding_ask_birth_place",
+    PROBING: "onboarding_probing_resume",
   };
-  await ctx.reply(msgs[step] ?? "Продолжим. Расскажи мне, что у тебя на душе.");
+  const key = map[step] ?? "onboarding_unknown_step";
+  await ctx.reply(t(loc, key));
 }
 
 export async function cmdMenu(ctx: Context): Promise<void> {
@@ -117,7 +151,7 @@ export async function cmdMenu(ctx: Context): Promise<void> {
   const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
   if (!user) { await cmdStart(ctx); return; }
   await d.repos.users.setState(user.telegramId, "CONVERSATION");
-  await ctx.reply("Вот моё меню. Выбирай, что откликнется:", {
+  await ctx.reply(t(user.language, "menu_title"), {
     parse_mode: "HTML",
     reply_markup: mainMenuKeyboard(user),
   });
@@ -131,7 +165,7 @@ export async function cmdProfile(ctx: Context): Promise<void> {
   const text = formatProfile(user);
   await ctx.reply(text, {
     parse_mode: "HTML",
-    reply_markup: new InlineKeyboard().text("🗑 Удалить мои данные", "nav:delete").row().text("🏠 Меню", "nav:menu"),
+    reply_markup: new InlineKeyboard().text(t(user.language, "profile_delete_data"), "nav:delete").row().text(t(user.language, "menu_home"), "nav:menu"),
   });
 }
 
@@ -141,25 +175,15 @@ export async function cmdBalance(ctx: Context): Promise<void> {
   const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
   if (!user) { await cmdStart(ctx); return; }
   const text = formatBalance(user);
-  await ctx.reply(text, { parse_mode: "HTML", reply_markup: buyMenuKeyboard() });
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: buyMenuKeyboard(user.language) });
 }
 
 export async function cmdHelp(ctx: Context): Promise<void> {
-  const text = `<b>Помощь</b>
-
-Я — София, мудрая ведунья. Вот что я умею:
-
-🔮 <b>Расклады</b> — малый (1💎), полный (3💎), любовный/карьера/решение (2💎)
-🌟 <b>Карта дня</b> — бесплатно раз в 20 часов
-🆓 <b>Бесплатная карта</b> — раз в 24 часа
-📜 <b>История</b> — твои прошлые расклады
-💬 <b>Разговор</b> — просто поговори со мной, 10 сообщений в день бесплатно
-
-💎 Кристаллы — поддержка, чтобы разговор мог продолжаться. На старте у тебя 3.
-
-Команды: /menu /profile /balance /cancel /help
-Если что-то сломалось — /start.`;
-  await ctx.reply(text, { parse_mode: "HTML", reply_markup: (await import("./keyboards.js")).homeOnlyKeyboard() });
+  if (!ctx.from) return;
+  const d = deps();
+  const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
+  const loc: Locale = user?.language ?? "ru";
+  await ctx.reply(t(loc, "help_body"), { parse_mode: "HTML", reply_markup: homeOnlyKeyboard(loc) });
 }
 
 export async function cmdCancel(ctx: Context): Promise<void> {
@@ -169,25 +193,79 @@ export async function cmdCancel(ctx: Context): Promise<void> {
   if (user) {
     if (user.onboardingCompleted) {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-    } else {
-      // keep onboarding state — can't cancel onboarding
     }
   }
-  await ctx.reply("Хорошо, вернёмся к началу. 🌙", {
+  await ctx.reply(t(user?.language ?? "ru", "cancel_body"), {
     parse_mode: "HTML",
     reply_markup: user ? mainMenuKeyboard(user) : undefined,
   });
 }
 
+// /lang — change language.
+export async function cmdLang(ctx: Context): Promise<void> {
+  if (!ctx.from) return;
+  const d = deps();
+  const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
+  const loc: Locale = user?.language ?? "ru";
+  await ctx.reply(t(loc, "lang_select"), {
+    parse_mode: "HTML",
+    reply_markup: languageKeyboard(loc),
+  });
+}
+
+// /affirmation — daily affirmation (LLM-generated, short).
+export async function cmdAffirmation(ctx: Context): Promise<void> {
+  if (!ctx.from) return;
+  const d = deps();
+  const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
+  if (!user) { await cmdStart(ctx); return; }
+  await sendAffirmation(ctx, user);
+}
+
+// Internal: build the affirmation text via LLM.
+async function sendAffirmation(ctx: Context, user: { telegramId: string; language: Locale; name: string | null; zodiacSign: string | null }): Promise<void> {
+  const d = deps();
+  const loc = user.language;
+  const prompt = loc === "en" ? AFFIRMATION_PROMPT_EN : AFFIRMATION_PROMPT_RU;
+  const messages = await d.services.context.buildMessages({
+    systemPrompt: SOFIA_SYSTEM_PROMPT,
+    userTelegramId: user.telegramId,
+    userName: user.name,
+    userZodiac: user.zodiacSign,
+    userAgeGroup: null,
+    currentUserMessage: prompt,
+  });
+  try {
+    const reply = await d.llm.generate(messages, { timeoutMs: 8000, maxTokens: 200 });
+    const text = reply.content?.trim();
+    if (text) {
+      await ctx.reply(`${t(loc, "affirmation_intro")}\n\n${text}`, {
+        parse_mode: "HTML",
+        reply_markup: homeOnlyKeyboard(loc),
+      });
+      return;
+    }
+  } catch (e) {
+    (ctx as any).log?.warn?.({ err: e }, "affirmation LLM call failed");
+  }
+  // Fallback: deterministic seed-based affirmation (no LLM).
+  await ctx.reply(`${t(loc, "affirmation_intro")}\n\n${loc === "en" ? "Be like still water today. 🌙" : "Будь как тихая вода сегодня. 🌙"}`, {
+    parse_mode: "HTML",
+    reply_markup: homeOnlyKeyboard(loc),
+  });
+}
+
 export async function cmdAdmin(ctx: Context): Promise<void> {
   if (!ctx.from) return;
+  const d = deps();
+  const user = (ctx as any).userDto ?? await d.repos.users.findByTelegramId(ctx.from.id.toString());
+  const loc: Locale = user?.language ?? "ru";
   if (!isAdmin(ctx.from.id.toString())) {
-    await ctx.reply("Это только для хранительницы. 🌙");
+    await ctx.reply(t(loc, "admin_forbidden"));
     return;
   }
-  const d = deps();
   await d.repos.users.setState(ctx.from.id.toString(), "ADMIN_PANEL");
-  await ctx.reply("🛠 <b>Админ-панель</b>", { parse_mode: "HTML", reply_markup: adminPanelKeyboard() });
+  await ctx.reply(t(loc, "admin_panel_title"), { parse_mode: "HTML", reply_markup: adminPanelKeyboard(loc) });
 }
 
 // Edit-in-place navigation helper — rewrites the current message.

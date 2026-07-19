@@ -9,7 +9,7 @@ import {
   SINGLE_CARD_PROMPT, CARD_OF_DAY_PROMPT,
 } from "../domain/prompts.js";
 import {
-  SPREADS, getCardByNumber, type SpreadDefinition,
+  SPREADS, getCardByNumber, getCardByNumberLocalized, type SpreadDefinition,
 } from "../domain/tarot.js";
 import { NumberList } from "../domain/valueObjects.js";
 import { ValidationError, CooldownActiveError, InsufficientCrystalsError } from "../domain/exceptions.js";
@@ -24,6 +24,7 @@ import {
 } from "./formatters.js";
 import { isAdmin } from "../config/env.js";
 import { InlineKeyboard } from "grammy";
+import { t, type Locale } from "../domain/i18n.js";
 
 const HTML = { parse_mode: "HTML" as const };
 
@@ -58,24 +59,26 @@ export async function handleMessage(ctx: Context): Promise<void> {
 
   // BLOCKED — only apology unblocks.
   if (state === "BLOCKED" || user.isBlocked) {
+    const loc: Locale = user.language;
     if (isSorry(text)) {
       await d.repos.users.update(tgId, { rudenessCount: 0, isBlocked: false });
       await d.repos.users.setState(tgId, "CONVERSATION");
-      await ctx.reply("Прощаю. Я всегда здесь. 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+      await ctx.reply(loc === "en" ? "I forgive you. I am always here. 🌙" : "Прощаю. Я всегда здесь. 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
     } else {
-      await ctx.reply("Скажи «извини», когда будешь готов. Я подожду.");
+      await ctx.reply(loc === "en" ? "Say \"sorry\" when you are ready. I will wait." : "Скажи «извини», когда будешь готов. Я подожду.");
     }
     return;
   }
 
   // AWAIT_DELETE_CONFIRM
   if (state === "AWAIT_DELETE_CONFIRM") {
-    if (text.toLowerCase().match(/удалить навсегда|да, удалить|confirm/)) {
+    const loc: Locale = user.language;
+    if (text.toLowerCase().match(/удалить навсегда|да, удалить|confirm|delete forever|yes, delete/)) {
       await d.repos.users.delete(tgId);
-      await ctx.reply("Я забуду тебя, как ты просил. Будь счастлив. 🌙");
+      await ctx.reply(t(loc, "profile_deleted"));
     } else {
       await d.repos.users.setState(tgId, "CONVERSATION");
-      await ctx.reply("Хорошо, я останусь. 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+      await ctx.reply(t(loc, "profile_delete_cancelled"), { ...HTML, reply_markup: mainMenuKeyboard(user) });
     }
     return;
   }
@@ -86,13 +89,15 @@ export async function handleMessage(ctx: Context): Promise<void> {
       await d.repos.users.setState(tgId, "CONVERSATION");
       return;
     }
+    const loc: Locale = user.language;
     const total = await d.repos.users.countAll();
     await d.repos.broadcasts.create(tgId, text, total);
-    // Stash the text for the confirm step.
     (ctx as any).__broadcastText = text;
+    const previewHdr = loc === "en" ? `<b>Broadcast preview:</b>\n\n` : `<b>Превью рассылки:</b>\n\n`;
+    const previewFtr = loc === "en" ? `\n\nRecipients: ${total} users. Confirm?` : `\n\nПолучат: ${total} пользователей. Подтвердить?`;
     await ctx.reply(
-      `<b>Превью рассылки:</b>\n\n${escapeHtml(text)}\n\nПолучат: ${total} пользователей. Подтвердить?`,
-      { ...HTML, reply_markup: broadcastConfirmKeyboard() },
+      previewHdr + escapeHtml(text) + previewFtr,
+      { ...HTML, reply_markup: broadcastConfirmKeyboard(loc) },
     );
     return;
   }
@@ -105,15 +110,15 @@ export async function handleMessage(ctx: Context): Promise<void> {
 
   // PAID_HOOK
   if (state === "PAID_HOOK") {
+    const loc: Locale = user.language;
     const lower = text.toLowerCase();
-    if (isSkip(lower) || lower.match(/(нет|позже|не сейчас|later)/)) {
+    if (isSkip(lower) || lower.match(/(нет|позже|не сейчас|later|no|not now)/)) {
       await d.repos.users.setState(tgId, "CONVERSATION");
-      await ctx.reply("Хорошо, я подожду. 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+      await ctx.reply(t(loc, "menu_later") === "Later" ? "Very well, I will wait. 🌙" : "Хорошо, я подожду. 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
       return;
     }
-    // Treat as wanting a reading → show menu.
     await d.repos.users.setState(tgId, "CONVERSATION");
-    await ctx.reply("Выбери расклад:", { ...HTML, reply_markup: readingMenuKeyboard() });
+    await ctx.reply(t(loc, "reading_menu_title"), { ...HTML, reply_markup: readingMenuKeyboard(loc) });
     return;
   }
 
@@ -124,8 +129,9 @@ export async function handleMessage(ctx: Context): Promise<void> {
   }
 
   // Fallback: reset to CONVERSATION.
+  const loc0: Locale = user.language;
   await d.repos.users.setState(tgId, "CONVERSATION");
-  await ctx.reply("Что-то сбилось. Давай начнём заново. О чём поговорим?", {
+  await ctx.reply(loc0 === "en" ? "Something slipped. Let's begin again. What shall we talk about?" : "Что-то сбилось. Давай начнём заново. О чём поговорим?", {
     ...HTML, reply_markup: mainMenuKeyboard(user),
   });
 }
@@ -135,17 +141,18 @@ async function handleConversation(ctx: Context, user: any, text: string): Promis
   const d = deps();
   const tgId = user.telegramId;
 
+  const loc: Locale = user.language;
   // 1. Rudeness check (word-boundary).
   if (isRude(text)) {
     const newCount = user.rudenessCount + 1;
     if (newCount >= 5) {
       await d.repos.users.update(tgId, { rudenessCount: newCount, isBlocked: true });
       await d.repos.users.setState(tgId, "BLOCKED");
-      await ctx.reply("Мне нужно время. Скажи «извини», когда будешь готов.");
+      await ctx.reply(loc === "en" ? "I need some time. Say \"sorry\" when you are ready." : "Мне нужно время. Скажи «извини», когда будешь готов.");
       return;
     }
     await d.repos.users.update(tgId, { rudenessCount: newCount });
-    await ctx.reply("Мне немного больно слышать это. Но я здесь.");
+    await ctx.reply(loc === "en" ? "That hurts a little to hear. But I am here." : "Мне немного больно слышать это. Но я здесь.");
     return;
   }
 
@@ -153,19 +160,19 @@ async function handleConversation(ctx: Context, user: any, text: string): Promis
   const trigger = matchTrigger(text);
   if (trigger === "menu") {
     await d.repos.users.setState(tgId, "CONVERSATION");
-    await ctx.reply("Вот моё меню:", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+    await ctx.reply(t(loc, "menu_title"), { ...HTML, reply_markup: mainMenuKeyboard(user) });
     return;
   }
   if (trigger === "balance") {
     const { formatBalance } = await import("./formatters.js");
-    await ctx.reply(formatBalance(user), { ...HTML, reply_markup: buyMenuKeyboard() });
+    await ctx.reply(formatBalance(user), { ...HTML, reply_markup: buyMenuKeyboard(loc) });
     return;
   }
   if (trigger === "profile") {
     const { formatProfile } = await import("./formatters.js");
     await ctx.reply(formatProfile(user), {
       ...HTML,
-      reply_markup: new InlineKeyboard().text("🗑 Удалить мои данные", "nav:delete").row().text("🏠 Меню", "nav:menu"),
+      reply_markup: new InlineKeyboard().text(t(loc, "profile_delete_data"), "nav:delete").row().text(t(loc, "menu_home"), "nav:menu"),
     });
     return;
   }
@@ -201,30 +208,31 @@ async function handleConversation(ctx: Context, user: any, text: string): Promis
   if (user.messageCount > 0 && user.messageCount % 7 === 0 && dailyCount <= behavior.dailyFreeMessages) {
     await d.repos.users.setState(tgId, "PAID_HOOK");
     await ctx.reply(
-      `Помнишь, я говорила, что в твоей карте есть ещё одна сторона? Сейчас самое время посмотреть. Малый расклад откроет то, что пока скрыто. 🔮`,
-      { ...HTML, reply_markup: paidHookKeyboard() },
+      loc === "en"
+        ? `Remember when I said your card has another side? Now is the moment to look. A small spread will reveal what is still hidden. 🔮`
+        : `Помнишь, я говорила, что в твоей карте есть ещё одна сторона? Сейчас самое время посмотреть. Малый расклад откроет то, что пока скрыто. 🔮`,
+      { ...HTML, reply_markup: paidHookKeyboard(loc) },
     );
     return;
   }
 
   // 7. Daily quota exceeded → soft offer (not a wall).
   if (dailyCount > behavior.dailyFreeMessages) {
-    // Still reply, but softer/shorter, and offer a package.
     const overBy = dailyCount - behavior.dailyFreeMessages;
     if (overBy === 1) {
-      // First over-limit message: offer 1💎 for +5.
       await ctx.reply(
-        `Сегодня мы много говорим, ${user.name ?? "милый"}. Если хочешь ещё пять сообщений — это один кристалл. А так — я отвечу, но короче.`,
-        { ...HTML, reply_markup: new InlineKeyboard().text("Да, 1💎 за +5", "buy:msg5").text("Хватит", "nav:later").row().text("🏠 Меню", "nav:menu") },
+        loc === "en"
+          ? `We have talked a lot today, ${user.name ?? "dear"}. If you want five more messages — it is one crystal. Otherwise, I will answer, but more briefly.`
+          : `Сегодня мы много говорим, ${user.name ?? "милый"}. Если хочешь ещё пять сообщений — это один кристалл. А так — я отвечу, но короче.`,
+        { ...HTML, reply_markup: new InlineKeyboard().text(loc === "en" ? "Yes, 1💎 for +5" : "Да, 1💎 за +5", "buy:msg5").text(loc === "en" ? "Enough" : "Хватит", "nav:later").row().text(t(loc, "menu_home"), "nav:menu") },
       );
     }
-    // Generate a SHORT Sofia reply.
-    await generateSofiaReply(ctx, user, text, { short: true });
+    await generateSofiaReply(ctx, user, text, { short: true, loc });
     return;
   }
 
   // 8. Default: full Sofia reply + memory extraction.
-  await generateSofiaReply(ctx, user, text, { short: false });
+  await generateSofiaReply(ctx, user, text, { short: false, loc });
 
   // Memory extraction runs after the reply is sent (long-polling process stays alive).
   if (user.messageCount % behavior.memoryExtractInterval === 0) {
@@ -235,10 +243,13 @@ async function handleConversation(ctx: Context, user: any, text: string): Promis
 }
 
 // ---- Sofia reply generation ----
-async function generateSofiaReply(ctx: Context, user: any, userText: string, opts: { short: boolean }): Promise<void> {
+async function generateSofiaReply(ctx: Context, user: any, userText: string, opts: { short: boolean; loc: Locale }): Promise<void> {
   const d = deps();
+  const shortSuffix = opts.loc === "en"
+    ? "\n\nANSWER BRIEFLY NOW: 1-2 sentences, soft, without long reasoning."
+    : "\n\nСЕЙЧАС ОТВЕЧАЙ КОРОЧЕ: 1-2 предложения, мягко, без длинных рассуждений.";
   const systemPrompt = opts.short
-    ? SOFIA_SYSTEM_PROMPT + "\n\nСЕЙЧАС ОТВЕЧАЙ КОРОЧЕ: 1-2 предложения, мягко, без длинных рассуждений."
+    ? SOFIA_SYSTEM_PROMPT + shortSuffix
     : SOFIA_SYSTEM_PROMPT;
   try {
     const messages = await d.services.context.buildMessages({
@@ -267,8 +278,10 @@ export async function startReadingFlow(ctx: Context, user: any, type: string): P
 
   // Free readings (cooldown-gated, no crystals).
   if (type === "single_card") {
+    const loc: Locale = user.language;
     if (!canGetFreeCard(user)) {
-      await ctx.reply("Луна ещё не встала. Бесплатная карта — раз в 24 часа. Загляни позже. 🌙");
+      const hoursLeft = Math.ceil((behavior.freeCardCooldownHours * 3600_000 - (Date.now() - new Date(user.lastFreeCardAt).getTime())) / 3600_000);
+      await ctx.reply(t(loc, "free_card_cooldown", { hours: String(Math.max(1, hoursLeft)) }));
       return;
     }
     await d.repos.users.update(user.telegramId, { lastFreeCardAt: new Date() });
@@ -277,8 +290,10 @@ export async function startReadingFlow(ctx: Context, user: any, type: string): P
     return;
   }
   if (type === "card_of_day") {
+    const loc: Locale = user.language;
     if (!canGetDailyCard(user)) {
-      await ctx.reply("Карта дня уже была. Загляни через несколько часов. 🌙");
+      const hoursLeft = Math.ceil((behavior.dailyCardCooldownHours * 3600_000 - (Date.now() - new Date(user.lastDailyCardAt).getTime())) / 3600_000);
+      await ctx.reply(t(loc, "card_of_day_cooldown", { hours: String(Math.max(1, hoursLeft)) }));
       return;
     }
     await d.repos.users.update(user.telegramId, { lastDailyCardAt: new Date(), streakDays: user.streakDays + 1 });
@@ -293,23 +308,23 @@ export async function startReadingFlow(ctx: Context, user: any, type: string): P
 
   // Paid tarot spreads → ask for numbers first.
   const spread = SPREADS[type];
+  const loc: Locale = user.language;
   if (!spread) {
-    await ctx.reply("Что-то не нашла такой расклад. Выбери из меню:", { ...HTML, reply_markup: readingMenuKeyboard() });
+    await ctx.reply(loc === "en" ? "I couldn't find that spread. Pick one from the menu:" : "Что-то не нашла такой расклад. Выбери из меню:", { ...HTML, reply_markup: readingMenuKeyboard(loc) });
     return;
   }
   // Check balance up-front; if insufficient, show buy menu but still ask for numbers? No — show buy menu.
   const cost = costFor(type);
   if (user.crystals < cost) {
     await ctx.reply(
-      `За этот расклад нужно ${cost} 💎, а у тебя ${user.crystals}. Хочешь пополнить?`,
-      { ...HTML, reply_markup: buyMenuKeyboard() },
+      loc === "en" ? `This spread costs ${cost} 💎, but you have ${user.crystals}. Want to top up?` : `За этот расклад нужно ${cost} 💎, а у тебя ${user.crystals}. Хочешь пополнить?`,
+      { ...HTML, reply_markup: buyMenuKeyboard(loc) },
     );
     return;
   }
-  // Stash the chosen type in user.readingType (we reuse onboardingStep to track).
   await d.repos.users.setState(user.telegramId, type as any); // TARO_SMALL etc.
   await d.repos.users.update(user.telegramId, { lastTopicSummary: spread.type });
-  await ctx.reply(`${spread.instruction}\n\n(Нужно ${spread.cardCount} чисел.)`);
+  await ctx.reply(`${spread.instruction}\n\n(${loc === "en" ? "Need" : "Нужно"} ${spread.cardCount} ${loc === "en" ? "numbers" : "чисел"}.)`);
 }
 
 function costFor(type: string): number {
@@ -336,12 +351,12 @@ function canGetDailyCard(user: any): boolean {
 // ---- TARO_ASK_NUMBERS handler ----
 async function handleTaroAskNumbers(ctx: Context, user: any, text: string): Promise<void> {
   const d = deps();
-  // The reading type is the current onboardingStep (we set it to TARO_SMALL etc.).
+  const loc: Locale = user.language;
   const type = user.onboardingStep;
   const spread = SPREADS[type];
   if (!spread) {
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
-    await ctx.reply("Что-то сбилось с раскладом. Попробуй снова через меню.", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+    await ctx.reply(loc === "en" ? "The spread slipped. Try again from the menu." : "Что-то сбилось с раскладом. Попробуй снова через меню.", { ...HTML, reply_markup: mainMenuKeyboard(user) });
     return;
   }
   try {
@@ -357,25 +372,26 @@ async function handleTaroAskNumbers(ctx: Context, user: any, text: string): Prom
 // ---- Charge + deliver tarot reading (atomic spend, refund on failure) ----
 async function chargeAndDeliverTarot(ctx: Context, user: any, spread: SpreadDefinition, nums: number[]): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   const cost = costFor(spread.type);
-  const cards = nums.map((n) => getCardByNumber(n));
-  const cardsWithPositions = cards.map((c, i) => `${spread.positions[i] ?? `Карта ${i+1}`}: ${c.name}${c.reversed ? " (перевёрнута)" : ""}`).join("\n");
+  const cards = nums.map((n) => getCardByNumberLocalized(n, loc));
+  const cardsWithPositions = cards.map((c, i) => `${spread.positions[i] ?? `Карта ${i+1}`}: ${c.name}${c.reversed ? (loc === "en" ? " (reversed)" : " (перевёрнута)") : ""}`).join("\n");
   const cardsJson = JSON.stringify(cards.map((c, i) => ({ name: c.name, reversed: c.reversed, position: spread.positions[i] ?? `Карта ${i+1}` })));
 
   // Charge BEFORE generate.
   let balance: number;
   try {
-    balance = await d.services.billing.spend(user.telegramId, cost, `Расклад ${spread.type}`);
+    balance = await d.services.billing.spend(user.telegramId, cost, loc === "en" ? `Reading ${spread.type}` : `Расклад ${spread.type}`);
   } catch (e) {
     if (e instanceof InsufficientCrystalsError) {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-      await ctx.reply(`Не хватает кристаллов. Нужно ${cost} 💎, у тебя ${user.crystals}.`, { ...HTML, reply_markup: buyMenuKeyboard() });
+      await ctx.reply(loc === "en" ? `Not enough crystals. Need ${cost} 💎, you have ${user.crystals}.` : `Не хватает кристаллов. Нужно ${cost} 💎, у тебя ${user.crystals}.`, { ...HTML, reply_markup: buyMenuKeyboard(loc) });
       return;
     }
     throw e;
   }
 
-  await ctx.reply("🔮 Тасую колоду, всматриваюсь…");
+  await ctx.reply(loc === "en" ? "🔮 Shuffling the deck, gazing…" : "🔮 Тасую колоду, всматриваюсь…");
   try {
     const prompt = TAROT_READING_PROMPT
       .replace("{name}", user.name ?? "друг")
@@ -391,37 +407,36 @@ async function chargeAndDeliverTarot(ctx: Context, user: any, spread: SpreadDefi
       currentUserMessage: prompt,
     });
     const res = await d.llm.generate(messages, { timeoutMs: 30000, maxTokens: 2000 });
-    // Save reading.
     await d.repos.readings.save(user.id, spread.type, null, cardsJson, res.content, cost);
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
-    // Send cards summary + interpretation.
-    await ctx.reply(`🎴 <b>Твои карты:</b>\n${cards.map((c,i) => `${i+1}. ${escapeHtml(c.name)}${c.reversed ? " (перевёрнута)" : ""} — <i>${escapeHtml(spread.positions[i] ?? "")}</i>`).join("\n")}`, HTML);
+    const cardsLabel = loc === "en" ? "Your cards:" : "Твои карты:";
+    await ctx.reply(`🎴 <b>${cardsLabel}</b>\n${cards.map((c,i) => `${i+1}. ${escapeHtml(c.name)}${c.reversed ? (loc === "en" ? " (reversed)" : " (перевёрнута)") : ""} — <i>${escapeHtml(spread.positions[i] ?? "")}</i>`).join("\n")}`, HTML);
     for (const chunk of splitMessage(res.content)) {
       await ctx.reply(chunk, HTML);
     }
-    await ctx.reply("🌙 Карта легла. Хочешь поговорим об этом?", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+    await ctx.reply(loc === "en" ? "🌙 The card has settled. Shall we talk about it?" : "🌙 Карта легла. Хочешь поговорим об этом?", { ...HTML, reply_markup: mainMenuKeyboard(user) });
   } catch (e) {
-    // Refund on failure.
-    await d.services.billing.refund(user.telegramId, cost, `Сбой расклада ${spread.type}`);
+    await d.services.billing.refund(user.telegramId, cost, loc === "en" ? `Failure ${spread.type}` : `Сбой расклада ${spread.type}`);
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
     (ctx as any).log?.error?.({ err: e }, "reading generation failed");
-    throw e; // error boundary shows Sofia-voice message
+    throw e;
   }
 }
 
 // ---- Charge + deliver horoscope ----
 async function chargeAndDeliver(ctx: Context, user: any, type: string, cost: number): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   if (user.crystals < cost) {
-    await ctx.reply(`Нужно ${cost} 💎, у тебя ${user.crystals}.`, { ...HTML, reply_markup: buyMenuKeyboard() });
+    await ctx.reply(loc === "en" ? `Need ${cost} 💎, you have ${user.crystals}.` : `Нужно ${cost} 💎, у тебя ${user.crystals}.`, { ...HTML, reply_markup: buyMenuKeyboard(loc) });
     return;
   }
   let balance: number;
   try {
-    balance = await d.services.billing.spend(user.telegramId, cost, `Гороскоп`);
+    balance = await d.services.billing.spend(user.telegramId, cost, loc === "en" ? "Horoscope" : "Гороскоп");
   } catch (e) { if (e instanceof InsufficientCrystalsError) { return; } throw e; }
 
-  await ctx.reply("♈ Всматриваюсь в звёзды…");
+  await ctx.reply(loc === "en" ? "♈ Gazing at the stars…" : "♈ Всматриваюсь в звёзды…");
   try {
     const prompt = HOROSCOPE_PROMPT.replace("{name}", user.name ?? "друг").replace("{zodiac}", user.zodiacSign ?? "—");
     const messages = await d.services.context.buildMessages({
@@ -440,7 +455,7 @@ async function chargeAndDeliver(ctx: Context, user: any, type: string, cost: num
     }
     await ctx.reply("🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
   } catch (e) {
-    await d.services.billing.refund(user.telegramId, cost, "Сбой гороскопа");
+    await d.services.billing.refund(user.telegramId, cost, loc === "en" ? "Horoscope failure" : "Сбой гороскопа");
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
     throw e;
   }
@@ -449,9 +464,10 @@ async function chargeAndDeliver(ctx: Context, user: any, type: string, cost: num
 // ---- Single card / card of day (free) ----
 async function deliverSingleCard(ctx: Context, user: any, type: string): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   const n = Math.floor(Math.random() * 78) + 1;
-  const card = getCardByNumber(n);
-  const reversedNote = card.reversed ? " (перевёрнута)" : "";
+  const card = getCardByNumberLocalized(n, loc);
+  const reversedNote = card.reversed ? (loc === "en" ? " (reversed)" : " (перевёрнута)") : "";
   const prompt = (type === "card_of_day" ? CARD_OF_DAY_PROMPT : SINGLE_CARD_PROMPT)
     .replace("{name}", user.name ?? "друг")
     .replace("{zodiac}", user.zodiacSign ?? "—")
@@ -483,18 +499,19 @@ async function deliverSingleCard(ctx: Context, user: any, type: string): Promise
 // ---- History viewer ----
 export async function showHistory(ctx: Context, user: any, page: number): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   const limit = 5;
   const total = await d.repos.readings.countByUser(user.id);
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const p = Math.min(Math.max(1, page), totalPages);
   const items = await d.repos.readings.listByUser(user.id, limit, (p - 1) * limit);
   if (items.length === 0) {
-    await ctx.reply("📜 У тебя ещё нет сохранённых раскладов. Хочешь сделать первый?", {
-      ...HTML, reply_markup: new InlineKeyboard().text("🔮 Сделать расклад", "rd:menu").row().text("🏠 Меню", "nav:menu"),
+    await ctx.reply(t(loc, "history_empty"), {
+      ...HTML, reply_markup: new InlineKeyboard().text(t(loc, "history_make_first"), "rd:menu").row().text(t(loc, "menu_home"), "nav:menu"),
     });
     return;
   }
-  const text = `<b>📜 Твои расклады (страница ${p}/${totalPages})</b>\n\n` +
-    items.map((r, i) => formatReadingHistoryItem(r, (p - 1) * limit + i + 1)).join("\n\n");
-  await ctx.reply(text, { ...HTML, reply_markup: historyPaginationKeyboard(p, totalPages) });
+  const text = t(loc, "history_page", { page: String(p), total: String(totalPages) }) + "\n\n" +
+    items.map((r, i) => formatReadingHistoryItem(r, (p - 1) * limit + i + 1, loc)).join("\n\n");
+  await ctx.reply(text, { ...HTML, reply_markup: historyPaginationKeyboard(p, totalPages, loc) });
 }

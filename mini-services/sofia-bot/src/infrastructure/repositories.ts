@@ -20,6 +20,7 @@ function toUserDTO(u: any): UserDTO {
     username: u.username,
     firstName: u.firstName,
     name: u.name,
+    language: (u.language === "en" ? "en" : "ru") as "ru" | "en",
     birthDate: u.birthDate ? (u.birthDate instanceof Date ? u.birthDate.toISOString().slice(0, 10) : String(u.birthDate).slice(0, 10)) : null,
     birthTime: u.birthTime,
     birthPlace: u.birthPlace,

@@ -11,6 +11,7 @@ import { FATE_CARD_PARTS } from "../domain/tarot.js";
 import { mainMenuKeyboard, paidHookKeyboard } from "./keyboards.js";
 import { escapeHtml, splitMessage } from "./formatters.js";
 import { env } from "../config/env.js";
+import { t, type Locale } from "../domain/i18n.js";
 
 const HTML = { parse_mode: "HTML" as const };
 
@@ -34,6 +35,7 @@ export async function handleOnboardingMessage(ctx: Context, text: string): Promi
 
 async function handleAskName(ctx: Context, user: any, text: string): Promise<boolean> {
   const d = deps();
+  const loc: Locale = user.language;
   try {
     const name = MessageText.from(text).forStorage(100);
     const gender = inferGender(name);
@@ -41,11 +43,13 @@ async function handleAskName(ctx: Context, user: any, text: string): Promise<boo
     await d.repos.users.setState(user.telegramId, "ASK_BIRTH_DATE");
     await d.repos.conversations.save(user.id, "user", name);
     await ctx.reply(
-      `${name}, красивое имя. А когда ты родился? День и месяц подскажи, или полную дату — так я лучше увижу твой знак.`,
+      loc === "en"
+        ? `${name}, a beautiful name. And when were you born? The day and month, or the full date — so I can see your sign better.`
+        : `${name}, красивое имя. А когда ты родился? День и месяц подскажи, или полную дату — так я лучше увижу твой знак.`,
     );
   } catch (e) {
     if (e instanceof ValidationError) {
-      await ctx.reply("Hmm, я не расслышала имя. Как тебя называть?");
+      await ctx.reply(loc === "en" ? "Hmm, I didn't catch the name. What shall I call you?" : "Hmm, я не расслышала имя. Как тебя называть?");
     } else throw e;
   }
   return true;
@@ -53,6 +57,7 @@ async function handleAskName(ctx: Context, user: any, text: string): Promise<boo
 
 async function handleAskBirthDate(ctx: Context, user: any, text: string): Promise<boolean> {
   const d = deps();
+  const loc: Locale = user.language;
   const lower = text.toLowerCase();
   try {
     const bd = BirthDate.parse(lower);
@@ -62,13 +67,15 @@ async function handleAskBirthDate(ctx: Context, user: any, text: string): Promis
       birthDate: bd.iso, zodiacSign: zodiac?.name ?? null, ageGroup,
     });
     await d.repos.users.setState(user.telegramId, "ASK_BIRTH_TIME");
-    const zodiacLine = zodiac ? `Знак твой — ${zodiac.emoji} ${zodiac.name}. ` : "";
+    const zodiacLine = zodiac ? (loc === "en" ? `Your sign is ${zodiac.emoji} ${zodiac.name}. ` : `Знак твой — ${zodiac.emoji} ${zodiac.name}. `) : "";
     await ctx.reply(
-      `${zodiacLine}А во сколько ты родился, если помнишь? Можно «пропустить» — это не главное.`,
+      loc === "en"
+        ? `${zodiacLine}And at what time were you born, if you remember? You can say "skip" — it is not the main thing.`
+        : `${zodiacLine}А во сколько ты родился, если помнишь? Можно «пропустить» — это не главное.`,
     );
   } catch (e) {
     if (e instanceof ValidationError) {
-      await ctx.reply("Hmm, я ждала день и месяц вроде 12.05. Попробуешь ещё раз? Или «пропустить».");
+      await ctx.reply(loc === "en" ? "Hmm, I was waiting for a day and month like 12.05. Try once more? Or 'skip'." : "Hmm, я ждала день и месяц вроде 12.05. Попробуешь ещё раз? Или «пропустить».");
     } else throw e;
   }
   return true;
@@ -76,10 +83,11 @@ async function handleAskBirthDate(ctx: Context, user: any, text: string): Promis
 
 async function handleAskBirthTime(ctx: Context, user: any, text: string): Promise<boolean> {
   const d = deps();
+  const loc: Locale = user.language;
   const lower = text.toLowerCase();
-  if (lower.match(/^(пропустить|пропуск|skip|не помню|далее|дальше)/)) {
+  if (lower.match(/^(пропустить|пропуск|skip|не помню|далее|дальше|don't remember|dont remember|next)/)) {
     await d.repos.users.setState(user.telegramId, "ASK_BIRTH_PLACE");
-    await ctx.reply("Хорошо. А где ты родился? Можно «пропустить».");
+    await ctx.reply(loc === "en" ? "Very well. And where were you born? You can say 'skip'." : "Хорошо. А где ты родился? Можно «пропустить».");
     return true;
   }
   const timeMatch = lower.match(/(\d{1,2})[:.](\d{2})/);
@@ -87,20 +95,20 @@ async function handleAskBirthTime(ctx: Context, user: any, text: string): Promis
     await d.repos.users.update(user.telegramId, { birthTime: `${timeMatch[1]}:${timeMatch[2]}` });
   }
   await d.repos.users.setState(user.telegramId, "ASK_BIRTH_PLACE");
-  await ctx.reply("Запомнила. А где ты родился? Можно «пропустить».");
+  await ctx.reply(loc === "en" ? "Remembered. And where were you born? You can say 'skip'." : "Запомнила. А где ты родился? Можно «пропустить».");
   return true;
 }
 
 async function handleAskBirthPlace(ctx: Context, user: any, text: string): Promise<boolean> {
   const d = deps();
+  const loc: Locale = user.language;
   const lower = text.toLowerCase();
-  if (!lower.match(/^(пропустить|пропуск|skip|не помню|далее|дальше)/)) {
+  if (!lower.match(/^(пропустить|пропуск|skip|не помню|далее|дальше|don't remember|dont remember|next)/)) {
     const place = MessageText.from(text).forStorage(200);
     await d.repos.users.update(user.telegramId, { birthPlace: place });
   }
-  // Enter PROBING — generate one question.
   await d.repos.users.setState(user.telegramId, "PROBING");
-  await ctx.reply("Теперь я немного вижу тебя. Дай мне миг всмотреться…");
+  await ctx.reply(loc === "en" ? "Now I see you a little. Give me a moment to look closer…" : "Теперь я немного вижу тебя. Дай мне миг всмотреться…");
   try {
     const messages = await d.services.context.buildMessages({
       systemPrompt: SOFIA_SYSTEM_PROMPT,
@@ -115,7 +123,7 @@ async function handleAskBirthPlace(ctx: Context, user: any, text: string): Promi
     const res = await d.llm.generate(messages, { timeoutMs: 12000, maxTokens: 200 });
     await ctx.reply(res.content);
   } catch (e) {
-    await ctx.reply("Что привело тебя ко мне сегодня? Я хочу услышать.");
+    await ctx.reply(loc === "en" ? "What brings you to me today? I want to hear." : "Что привело тебя ко мне сегодня? Я хочу услышать.");
   }
   return true;
 }
@@ -132,7 +140,8 @@ async function handleProbing(ctx: Context, user: any, text: string): Promise<boo
 // Deliver the 4-part fate card. Called once per user on onboarding completion.
 export async function deliverFateCard(ctx: Context, user: any, probingAnswer: string): Promise<void> {
   const d = deps();
-  await ctx.reply("🔮 Всматриваюсь в твою карту… дай мне миг.");
+  const loc: Locale = user.language;
+  await ctx.reply(loc === "en" ? "🔮 Gazing into your card… give me a moment." : "🔮 Всматриваюсь в твою карту… дай мне миг.");
 
   const prompt = FATE_CARD_PROMPT
     .replace("{name}", user.name ?? "друг")
@@ -152,23 +161,19 @@ export async function deliverFateCard(ctx: Context, user: any, probingAnswer: st
     const res = await d.llm.generate(messages, { timeoutMs: 20000, maxTokens: 1200 });
     const content = res.content;
 
-    // Save the fate card as a reading.
     await d.repos.readings.save(user.id, "fate_card", null, "[]", content, 0);
-    // Mark onboarding completed + transition to CONVERSATION.
-    await d.repos.users.update(user.telegramId, { onboardingCompleted: true, lastTopicSummary: "карта судьбы" });
+    await d.repos.users.update(user.telegramId, { onboardingCompleted: true, lastTopicSummary: loc === "en" ? "fate card" : "карта судьбы" });
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
 
-    // Send in chunks (it may be long).
     for (const chunk of splitMessage(content)) {
       await ctx.reply(chunk, HTML);
     }
-    // Hook.
     await ctx.reply(
-      "В твоей карте есть ещё одна сторона… хочешь, приоткрою?",
-      { ...HTML, reply_markup: paidHookKeyboard() },
+      loc === "en" ? "There is another side to your card… shall I open it?" : "В твоей карте есть ещё одна сторона… хочешь, приоткрою?",
+      { ...HTML, reply_markup: paidHookKeyboard(loc) },
     );
   } catch (e) {
-    await ctx.reply("Туман сегодня густой, милый. Карта не хочет открываться полностью. Загляни чуть позже — или просто поговорим. 🌙");
+    await ctx.reply(loc === "en" ? "The mist is thick today, dear. The card doesn't want to open fully. Drop by later — or we can simply talk. 🌙" : "Туман сегодня густой, милый. Карта не хочет открываться полностью. Загляни чуть позже — или просто поговорим. 🌙");
     await d.repos.users.update(user.telegramId, { onboardingCompleted: true });
     await d.repos.users.setState(user.telegramId, "CONVERSATION");
   }

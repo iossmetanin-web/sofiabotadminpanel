@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
       take: limit,
       select: {
         id: true, telegramId: true, username: true, firstName: true, name: true,
+        language: true,
         zodiacSign: true, onboardingCompleted: true, onboardingStep: true,
         crystals: true, messageCount: true, streakDays: true, isBlocked: true,
         isAdmin: true, lastSeenAt: true, createdAt: true, referredById: true,

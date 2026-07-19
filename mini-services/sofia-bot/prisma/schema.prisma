@@ -17,7 +17,7 @@ model User {
   username            String?
   firstName           String?
   lastName            String?
-  language            String   @default("ru")
+  language            String   @default("ru") // "ru" | "en"
 
   // Onboarding
   name                String?

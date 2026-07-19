@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   await buildBot(deps);
 
   // 9. Start scheduler.
-  const scheduler = new CronScheduler(bot, repos.users, repos.broadcasts, repos.audit);
+  const scheduler = new CronScheduler(bot, repos.users, repos.broadcasts, repos.audit, llm);
   scheduler.start();
 
   // 10. Internal HTTP server (health + admin API hook for the Next.js panel).

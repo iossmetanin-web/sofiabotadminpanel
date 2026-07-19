@@ -198,3 +198,82 @@ Stage Summary:
 - Bot is live and ready: user can message @oracultetris_bot to test the full flow (onboarding → fate card → conversation → paid readings).
 - Known limitation: payment integration (Stars/fiat) is UX-only (data model + buy menu); real payments are a later phase (documented in Roadmap).
 - Next: cron job (webDevReview every 15 min) will continue QA + feature expansion.
+
+---
+Task ID: 4
+Agent: orchestrator (main, webDevReview cron)
+Task: Assess project status, perform QA, add new features (i18n, inline mode, weekly digest, affirmation, Mini App, streak dashboard), and overhaul admin panel styling.
+
+Work Log:
+- Read existing worklog.md and assessed project state.
+- Verified bot running with fresh heartbeat (<5s); Next.js lint clean; bot tsc clean.
+- QA via agent-browser on the original 4-tab admin panel: all tabs rendered, bot status online, broadcasts working.
+- BOT — Internationalization (i18n) module:
+  * Created `src/domain/i18n.ts` with full RU + EN packs (110+ translation keys each), `t(loc, key, params)` formatter, type-safe Dict.
+  * Added `language` field to UserDTO + Prisma schema (already in DB); updated `toUserDTO` mapper.
+  * Localized every user-facing string in commands.ts, callbacks.ts, conversation.ts, onboarding.ts, keyboards.ts, formatters.ts, scheduler.ts.
+  * Added `/lang` command + `lang:menu` / `lang:set:ru` / `lang:set:en` callback handlers.
+  * Localized tarot deck: added English names (`MAJOR_ARCANA_EN`, `SUIT_NAMES_EN`, `RANKS_EN`, `FULL_DECK_EN`) and `getCardByNumberLocalized(n, loc)`.
+  * Localized keywords for inline mode (`MAJOR_ARCANA_KEYWORDS_RU/EN`).
+- BOT — Inline mode (`src/presentation/inline.ts`):
+  * Registered `bot.inlineQuery(/.*/, handleInlineQuery)`.
+  * Returns 3 article results: card of the moment (Major Arcana by day), affirmation of the moment, LLM-generated quick answer to the user's typed question.
+  * Each result deep-links to `?start=card|affirmation|question` to continue in private chat.
+  * NOTE: BotFather flag `/setinline` must be ON for inline mode to be invokable by users — owner action required (documented in handler comment).
+- BOT — Weekly digest scheduler (extended `CronScheduler`):
+  * Added `weeklyDigest()` job: runs every 6h, sends only on Sundays 17:00-23:00 local.
+  * Uses `BotConfig{ id: "weekly_digest" }` as last-sent marker (idempotent per week).
+  * Computes weekly stats (new users, active 7d, messages, readings, crystals spent, top-3 active) via Prisma.
+  * Generates Sofia-flavoured summary via LLM (with deterministic fallback if LLM fails).
+  * Sends to all admins (`isAdmin: true`).
+- BOT — Daily affirmation (`/affirmation` command + `nav:affirmation` callback):
+  * New prompt `AFFIRMATION_PROMPT_RU` / `AFFIRMATION_PROMPT_EN` in domain/prompts.ts.
+  * Generates short Sofia-voice affirmation via LLM; deterministic fallback if LLM fails.
+- BOT — Mini App launch button (`nav:miniapp` callback):
+  * Added to main menu keyboard.
+  * Opens an explanatory message + Telegram link (placeholder until a real Web App URL is configured in BotFather).
+- BOT — Deep-link actions on /start:
+  * `?start=card` → opens reading menu.
+  * `?start=affirmation` → triggers sendAffirmation.
+  * `?start=question` → Sofia prompts user to ask.
+  * `?start=lang` → opens language picker.
+- ADMIN PANEL — Major styling overhaul (`src/app/page.tsx`):
+  * Total rewrite: 6 tabs (Обзор / Пользователи / Расклады / Серии / Дайджест / Рассылки) — up from 4.
+  * Hero section: gradient + animated spark dots + 4 mini-feature cards.
+  * Header: animated pulse ring on avatar, tooltip on bot-status badge with last-heartbeat time, auto-refresh every 30s.
+  * StatCards: now include inline Sparkline SVG (no external chart lib) showing 14-day trend.
+  * Overview tab: 4 KPI cards with sparklines → funnel + ZodiacWheel (custom SVG ring of 12 glyphs, lit by user counts) + readings-by-type → secondary KPI row → 14-day ActivityChart (bar chart with tooltips on each day showing msgs/readings/newUsers/crystals) → referral leaderboard.
+  * Users tab: language column (🇷🇺/🇬🇧), zodiac emoji, avatar circle with initial, flame icon for streaks, tooltip on language badge.
+  * Streaks tab (NEW): 4 KPI cards (card-of-day 7d active, max streak, users with streak >0, DAU today) → top-streaks leaderboard (gold/silver/bronze) → streak distribution Progress bars → 14-day DAU bar chart with tooltips.
+  * Digest tab (NEW): gradient hero card with week range + last-sent badge → 5 KPI mini-cards (new users, active 7d, messages, readings, crystals) → top-5 weekly users + readings-by-type for the week → recent broadcasts.
+  * Broadcasts tab: clearer layout with hint about HTML + async outbox pattern.
+  * Reusable components: `StatCard`, `FunnelBar`, `DigestStat`, `ActivityChart` (all in page.tsx), `Sparkline` + `BarSparkline` (separate file), `ZodiacWheel` (separate file).
+- ADMIN PANEL — Custom CSS animations added to globals.css:
+  * `sofia-shimmer`, `sofia-glow`, `sofia-float`, `sofia-pulse-ring`, `sofia-fade-in`, `sofia-spark`, `sofia-dash` (sparkline draw animation).
+  * `.sofia-glass` glassmorphism helper.
+  * `.sofia-scroll` custom thin scrollbar.
+- ADMIN PANEL — Font: added Cormorant Garamond serif via next/font/google (with Cyrillic subset) for `font-serif` class.
+- API — 4 new endpoints:
+  * `GET /api/activity?days=14` — daily buckets (messages, sofiaMsgs, userMsgs, readings, newUsers, crystalsSpent) for sparklines + activity chart.
+  * `GET /api/streaks` — top streaks, distribution buckets, 14-day DAU, card-of-day active users count.
+  * `GET /api/referrals` — leaderboard with rank/referrer/referrals, totals (totalReferrals, rewarded, usersWithReferrer, crystalsAwarded).
+  * `GET /api/digest` — weekly digest preview (weekRange, lastSentAt, stats, topUsers, readingsByType, recentBroadcasts).
+  * Updated `GET /api/users` to include `language` field.
+- VERIFICATION:
+  * Next.js `bun run lint` — 0 errors, 0 warnings.
+  * Bot `tsc --noEmit` — 0 errors.
+  * Bot restarted cleanly: long polling + scheduler (now with weekly digest) + internal HTTP all up.
+  * Heartbeat fresh (<5s).
+  * agent-browser screenshots captured for all 6 tabs (qa-new-overview/users/readings/streaks/digest/broadcasts.png).
+  * VLM analysis confirms dark cohesive palette, hierarchical layout, all tabs visible and populated.
+
+Stage Summary:
+- New user-facing bot features: 2 languages (RU/EN), inline mode (pending BotFather flag), weekly admin digest, /affirmation command, Mini App launch button, deep-link entry points (card/affirmation/question/lang).
+- New admin panel: 6 tabs, sparklines on every KPI, zodiac wheel, 14-day activity chart, streak dashboard with leaderboard, weekly digest preview, referral mini-board. Custom animations + serif font.
+- Architecture: all new code follows the existing 4-layer Clean Architecture. i18n module lives in domain (ubiquitous language). New endpoints are thin Next.js route handlers reading from the shared Prisma DB.
+- Bot is live at @oracultetris_bot and running with all new features. Admin panel renders at http://localhost:3000/.
+- Known follow-ups for the owner (manual steps):
+  1. Enable inline mode via @BotFather (`/setinline`) — code is ready, flag is OFF by default.
+  2. Configure a real Mini App URL via @BotFather (`/newapp` or `Web App` button) — currently the Mini App button shows an explanatory placeholder.
+  3. Real payment integration (Telegram Stars invoices) — currently the buy menu shows a "soon" message; data model is in place.
+- Next cron round can pick up: persona variations (3 Sofia voices), payment integration with `bot.api.sendInvoice`, Mini App HTML page, more tarot spreads.

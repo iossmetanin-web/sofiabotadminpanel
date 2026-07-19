@@ -14,9 +14,11 @@ import {
 
 import {
   cmdStart, cmdMenu, cmdProfile, cmdBalance, cmdHelp, cmdCancel, cmdAdmin,
+  cmdLang, cmdAffirmation,
 } from "./commands.js";
 import { handleMessage } from "./conversation.js";
 import { handleCallback } from "./callbacks.js";
+import { handleInlineQuery } from "./inline.js";
 
 export async function buildBot(depsValue: Deps): Promise<Bot> {
   const bot = depsValue.bot;
@@ -37,6 +39,13 @@ export async function buildBot(depsValue: Deps): Promise<Bot> {
   bot.command("help", cmdHelp);
   bot.command("cancel", cmdCancel);
   bot.command("admin", cmdAdmin);
+  bot.command("lang", cmdLang);
+  bot.command("affirmation", cmdAffirmation);
+
+  // Inline mode (@sofia <query>) — viral entry from any chat. Requires inline mode
+  // to be enabled via @BotFather (toggle /setinline). The handler is registered regardless;
+  // it stays inert until the BotFather flag is on.
+  bot.inlineQuery(/.*/, handleInlineQuery);
 
   // /add @username N — admin crystal gift.
   bot.command("add", async (ctx) => {
@@ -74,11 +83,12 @@ export async function buildBot(depsValue: Deps): Promise<Bot> {
     const d = deps();
     const user = await d.repos.users.findByTelegramId(ctx.from.id.toString());
     if (!user) return;
+    const loc = user.language;
     if (["ASK_NAME", "ASK_BIRTH_DATE", "ASK_BIRTH_TIME", "ASK_BIRTH_PLACE"].includes(user.onboardingStep)) {
-      await ctx.reply("Я слушаю слова. Напиши мне текстом. 🌙");
+      await ctx.reply(loc === "en" ? "I listen to words. Write to me in text. 🌙" : "Я слушаю слова. Напиши мне текстом. 🌙");
       return;
     }
-    await ctx.reply("Я слышу тебя, но вижу только слова. Расскажи мне текстом, что у тебя на душе. 🌙");
+    await ctx.reply(loc === "en" ? "I hear you, but I can only see words. Tell me in text what is on your heart. 🌙" : "Я слышу тебя, но вижу только слова. Расскажи мне текстом, что у тебя на душе. 🌙");
   });
 
   // bot.catch for any uncaught errors.

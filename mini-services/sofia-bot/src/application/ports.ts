@@ -12,6 +12,7 @@ export type UserDTO = {
   username: string | null;
   firstName: string | null;
   name: string | null;
+  language: "ru" | "en"; // i18n locale
   birthDate: string | null; // ISO
   birthTime: string | null;
   birthPlace: string | null;

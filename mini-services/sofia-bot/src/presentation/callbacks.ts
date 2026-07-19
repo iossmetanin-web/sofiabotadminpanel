@@ -5,14 +5,17 @@ import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { deps } from "./deps.js";
 import { isAdmin } from "../config/env.js";
+import { t, type Locale, localeLabel } from "../domain/i18n.js";
 import {
   mainMenuKeyboard, readingMenuKeyboard, buyMenuKeyboard, backHomeKeyboard,
   adminPanelKeyboard, deleteConfirmKeyboard, historyPaginationKeyboard,
-  referralKeyboard, usersPaginationKeyboard,
+  referralKeyboard, usersPaginationKeyboard, languageKeyboard, settingsKeyboard,
+  homeOnlyKeyboard,
 } from "./keyboards.js";
 import { formatProfile, formatBalance, formatReadingHistoryItem, escapeHtml } from "./formatters.js";
 import { editTo } from "./commands.js";
 import { startReadingFlow } from "./conversation.js";
+import { SOFIA_SYSTEM_PROMPT, AFFIRMATION_PROMPT_RU, AFFIRMATION_PROMPT_EN } from "../domain/prompts.js";
 
 const HTML = { parse_mode: "HTML" as const };
 
@@ -27,7 +30,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
   await ctx.answerCallbackQuery().catch(() => {});
 
   if (!user) {
-    await ctx.reply("Похоже, я тебя не помню. Нажми /start.");
+    await ctx.reply(t("ru", "err_unknown_user"));
     return;
   }
 
@@ -43,38 +46,41 @@ export async function handleCallback(ctx: Context): Promise<void> {
     if (ns === "buy") return handleBuy(ctx, user, action);
     if (ns === "admin") return handleAdmin(ctx, user, action, payload);
     if (ns === "share") return handleShare(ctx, user, action);
+    if (ns === "lang") return handleLang(ctx, user, action, payload);
     log?.warn?.({ data }, "unknown callback namespace");
+    await ctx.reply(t(user.language, "err_unknown_callback"));
   } catch (e) {
     log?.error?.({ err: e, data }, "callback handler failed");
-    await ctx.reply("Что-то сбилось. Попробуй /menu.");
+    await ctx.reply(t(user.language, "err_generic"));
   }
 }
 
 async function handleNav(ctx: Context, user: any, action: string, payload: string): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   switch (action) {
     case "menu": {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-      await editTo(ctx, "Вот моё меню. Выбирай, что откликнется:", mainMenuKeyboard(user));
+      await editTo(ctx, t(loc, "menu_title"), mainMenuKeyboard(user));
       return;
     }
     case "back": {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-      await editTo(ctx, "О чём поговорим?", mainMenuKeyboard(user));
+      await editTo(ctx, loc === "en" ? "What shall we talk about?" : "О чём поговорим?", mainMenuKeyboard(user));
       return;
     }
     case "later": {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-      await editTo(ctx, "Хорошо, я подожду. 🌙", mainMenuKeyboard(user));
+      await editTo(ctx, loc === "en" ? "Very well, I will wait. 🌙" : "Хорошо, я подожду. 🌙", mainMenuKeyboard(user));
       return;
     }
     case "profile": {
       await editTo(ctx, formatProfile(user), new InlineKeyboard()
-        .text("🗑 Удалить мои данные", "nav:delete").row().text("🏠 Меню", "nav:menu"));
+        .text(t(loc, "profile_delete_data"), "nav:delete").row().text(t(loc, "menu_home"), "nav:menu"));
       return;
     }
     case "balance": {
-      await editTo(ctx, formatBalance(user), buyMenuKeyboard());
+      await editTo(ctx, formatBalance(user), buyMenuKeyboard(loc));
       return;
     }
     case "history": {
@@ -83,45 +89,85 @@ async function handleNav(ctx: Context, user: any, action: string, payload: strin
       return;
     }
     case "settings": {
-      await editTo(ctx, "⚙️ <b>Настройки</b>\n\n[🔔 Ежедневная карта: ✅ Вкл]\n[🌍 Язык: 🇷🇺 Русский]\n\n(Полные настройки скоро)",
-        backHomeKeyboard());
+      await editTo(ctx,
+        t(loc, "settings_title") + "\n\n" +
+        t(loc, "settings_lang", { lang: localeLabel(loc) }) + "\n" +
+        t(loc, "settings_daily_card") + ": " + t(loc, "settings_on") + "\n" +
+        t(loc, "settings_soon"),
+        settingsKeyboard(user));
       return;
     }
     case "help": {
-      await editTo(ctx, "<b>Помощь</b>\n\nПросто поговори со мной, или выбери расклад из меню. /cancel — отменить. /start — начать заново.", backHomeKeyboard());
+      await editTo(ctx, t(loc, "help_body"), backHomeKeyboard(loc));
       return;
     }
     case "referral": {
-      const kb = referralKeyboard(user.referralCode, d.botUsername);
+      const kb = referralKeyboard(user.referralCode, d.botUsername, loc);
       const link = `https://t.me/${d.botUsername}?start=ref_${user.referralCode}`;
-      await editTo(ctx, `🎁 <b>Пригласи друга</b>\n\nЗа каждого друга, который завершит знакомство со мной, ты получишь +1 💎.\n\nТвоя ссылка:\n<code>${link}</code>`, kb);
+      await editTo(ctx, t(loc, "referral_title") + "\n\n" + t(loc, "referral_body", { link }), kb);
+      return;
+    }
+    case "affirmation": {
+      await sendAffirmationInline(ctx, user);
+      return;
+    }
+    case "miniapp": {
+      // Mini App launch — currently a placeholder; when a Web App URL is configured in BotFather,
+      // we can switch to a real web_app button. For now, an explanatory message.
+      await editTo(ctx, t(loc, "miniapp_title") + "\n\n" + t(loc, "miniapp_body"),
+        new InlineKeyboard()
+          .url("🔗 " + (loc === "en" ? "Open in Telegram" : "Открыть в Telegram"), `https://t.me/${d.botUsername}`)
+          .row()
+          .text(t(loc, "menu_back"), "nav:back").text(t(loc, "menu_home"), "nav:menu"));
       return;
     }
     case "delete": {
       await d.repos.users.setState(user.telegramId, "AWAIT_DELETE_CONFIRM");
       await editTo(ctx,
-        "⚠️ <b>Удалить все данные?</b>\n\nЭто удалит твои расклады, мою память о тебе, кристаллы. Я забуду тебя. Действие необратимо.",
-        deleteConfirmKeyboard());
+        t(loc, "profile_delete_confirm_title") + "\n\n" + t(loc, "profile_delete_confirm_body"),
+        deleteConfirmKeyboard(loc));
       return;
     }
     case "cancel_delete": {
       await d.repos.users.setState(user.telegramId, "CONVERSATION");
-      await editTo(ctx, "Хорошо, я останусь. 🌙", mainMenuKeyboard(user));
+      await editTo(ctx, t(loc, "profile_delete_cancelled"), mainMenuKeyboard(user));
       return;
     }
     case "confirm_delete": {
       await d.repos.users.delete(user.telegramId);
       await d.repos.audit.record(user.telegramId, "delete_own_data", user.telegramId, null);
-      await ctx.reply("Я забуду тебя, как ты просил. Будь счастлив. 🌙");
+      await ctx.reply(t(loc, "profile_deleted"));
       return;
     }
     case "none": return; // static label button
   }
 }
 
+async function handleLang(ctx: Context, user: any, action: string, payload: string): Promise<void> {
+  const d = deps();
+  const loc: Locale = user.language;
+  if (action === "menu") {
+    await editTo(ctx, t(loc, "lang_select"), languageKeyboard(loc));
+    return;
+  }
+  if (action === "set") {
+    if (payload !== "ru" && payload !== "en") return;
+    const newLoc: Locale = payload;
+    await d.repos.users.update(user.telegramId, { language: newLoc });
+    // Re-fetch user so subsequent keyboards use the new locale.
+    const updated = await d.repos.users.findByTelegramId(user.telegramId);
+    if (updated) {
+      await editTo(ctx,
+        t(newLoc, "lang_changed", { lang: localeLabel(newLoc) }) + "\n\n" + t(newLoc, "menu_title"),
+        mainMenuKeyboard(updated));
+    }
+    return;
+  }
+}
+
 async function handleReading(ctx: Context, user: any, action: string, payload: string): Promise<void> {
   if (action === "menu") {
-    await editTo(ctx, "📜 Выбери расклад:", readingMenuKeyboard());
+    await editTo(ctx, t(user.language, "reading_menu_title"), readingMenuKeyboard(user.language));
     return;
   }
   if (action === "pick") {
@@ -136,29 +182,31 @@ async function handleReading(ctx: Context, user: any, action: string, payload: s
 
 async function handleBuy(ctx: Context, user: any, action: string): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   if (action === "msg5") {
     if (user.crystals >= 1) {
-      await d.services.billing.spend(user.telegramId, 1, "Пакет +5 сообщений");
+      await d.services.billing.spend(user.telegramId, 1, loc === "en" ? "Pack +5 messages" : "Пакет +5 сообщений");
       await d.repos.users.update(user.telegramId, { dailyMessageCount: Math.max(0, user.dailyMessageCount - 5) });
-      await ctx.reply("Готово. Пять сообщений добавлено. Продолжим? 🌙", { ...HTML, reply_markup: mainMenuKeyboard(user) });
+      await ctx.reply(t(loc, "billing_pack_added"), { ...HTML, reply_markup: mainMenuKeyboard(user) });
     } else {
-      await ctx.reply("Не хватает 1 💎. Загляни в баланс.", { ...HTML, reply_markup: buyMenuKeyboard() });
+      await ctx.reply(t(loc, "billing_low_balance", { count: 1 }), { ...HTML, reply_markup: buyMenuKeyboard(loc) });
     }
     return;
   }
-  await ctx.reply("Скоро 🌙. Платежи подключим чуть позже — а пока кристаллы можно получить за приглашение друзей (🎁 в меню).", { ...HTML, reply_markup: buyMenuKeyboard() });
+  await ctx.reply(t(loc, "billing_buy_soon"), { ...HTML, reply_markup: buyMenuKeyboard(loc) });
 }
 
 async function handleAdmin(ctx: Context, user: any, action: string, payload: string): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   if (!isAdmin(user.telegramId)) {
-    await ctx.reply("Это только для хранительницы. 🌙");
+    await ctx.reply(t(loc, "admin_forbidden"));
     return;
   }
   switch (action) {
     case "panel": {
       await d.repos.users.setState(user.telegramId, "ADMIN_PANEL");
-      await editTo(ctx, "🛠 <b>Админ-панель</b>", adminPanelKeyboard());
+      await editTo(ctx, t(loc, "admin_panel_title"), adminPanelKeyboard(loc));
       return;
     }
     case "stats": {
@@ -170,15 +218,11 @@ async function handleAdmin(ctx: Context, user: any, action: string, payload: str
         d.repos.readings.countAll(),
         d.repos.transactions.sumCrystalsSpent(),
       ]);
-      await editTo(ctx,
-        `📊 <b>Статистика</b>\n\n` +
-        `Пользователей: <b>${totalUsers}</b>\n` +
-        `Активны за 24ч: <b>${active24h}</b>\n` +
-        `Завершили онбординг: <b>${onboarded}</b>\n` +
-        `Сообщений всего: <b>${totalMsgs}</b>\n` +
-        `Раскладов всего: <b>${totalReadings}</b>\n` +
-        `💎 Кристаллов потрачено: <b>${crystalsSpent}</b>`,
-        new InlineKeyboard().text("🛠 Админ", "admin:panel").row().text("🏠 Меню", "nav:menu"));
+      const label = loc === "en"
+        ? `📊 <b>Stats</b>\n\nUsers: <b>${totalUsers}</b>\nActive 24h: <b>${active24h}</b>\nOnboarded: <b>${onboarded}</b>\nMessages: <b>${totalMsgs}</b>\nReadings: <b>${totalReadings}</b>\n💎 Crystals spent: <b>${crystalsSpent}</b>`
+        : `📊 <b>Статистика</b>\n\nПользователей: <b>${totalUsers}</b>\nАктивны за 24ч: <b>${active24h}</b>\nЗавершили онбординг: <b>${onboarded}</b>\nСообщений всего: <b>${totalMsgs}</b>\nРаскладов всего: <b>${totalReadings}</b>\n💎 Кристаллов потрачено: <b>${crystalsSpent}</b>`;
+      await editTo(ctx, label,
+        new InlineKeyboard().text("🛠 " + (loc === "en" ? "Admin" : "Админ"), "admin:panel").row().text(t(loc, "menu_home"), "nav:menu"));
       return;
     }
     case "users": {
@@ -187,20 +231,21 @@ async function handleAdmin(ctx: Context, user: any, action: string, payload: str
       const total = await d.repos.users.countAll();
       const totalPages = Math.max(1, Math.ceil(total / limit));
       const users = await d.repos.users.listPaginated((page - 1) * limit, limit);
-      const text = `<b>👥 Пользователи (${page}/${totalPages})</b>\n\n` +
+      const title = loc === "en" ? `<b>👥 Users (${page}/${totalPages})</b>` : `<b>👥 Пользователи (${page}/${totalPages})</b>`;
+      const text = title + "\n\n" +
         users.map((u: any) => `• ${escapeHtml(u.name ?? u.firstName ?? "—")} @${escapeHtml(u.username ?? "—")} · 💎${u.crystals} · ${u.onboardingStep}`).join("\n");
-      await editTo(ctx, text, usersPaginationKeyboard(page, totalPages));
+      await editTo(ctx, text, usersPaginationKeyboard(page, totalPages, loc));
       return;
     }
     case "add": {
       await d.repos.users.setState(user.telegramId, "ADMIN_PANEL");
-      await ctx.reply("💸 Чтобы начислить кристаллы, отправь:\n\n<code>/add @username 5</code>\n\n(где 5 — количество)", HTML);
+      await ctx.reply(t(loc, "admin_add_format"), HTML);
       return;
     }
     case "broadcast": {
       await d.repos.users.setState(user.telegramId, "BROADCAST");
-      await editTo(ctx, "📢 <b>Рассылка</b>\n\nВведи текст рассылки (следующим сообщением):",
-        new InlineKeyboard().text("❌ Отмена", "admin:broadcast_cancel"));
+      await editTo(ctx, t(loc, "admin_broadcast_prompt"),
+        new InlineKeyboard().text(t(loc, "admin_broadcast_cancel"), "admin:broadcast_cancel"));
       return;
     }
     case "broadcast_confirm": {
@@ -209,10 +254,10 @@ async function handleAdmin(ctx: Context, user: any, action: string, payload: str
       const previewText = msg && "text" in msg ? (msg as any).text : "";
       const m = previewText.match(/Превью рассылки:\n\n([\s\S]*?)\n\nПолучат:/);
       const text = m ? m[1] : "";
-      if (!text) { await ctx.reply("Не нашла текст. Начни заново."); return; }
+      if (!text) { await ctx.reply(t(loc, "admin_broadcast_no_text")); return; }
       const total = await d.repos.users.countAll();
       const bc = await d.repos.broadcasts.create(user.telegramId, text, total);
-      await editTo(ctx, `📤 Рассылка запущена (id: ${bc.id}). Отправляю…`, adminPanelKeyboard());
+      await editTo(ctx, t(loc, "admin_broadcast_launched", { id: bc.id }), adminPanelKeyboard(loc));
       void (async () => {
         let sent = 0, failed = 0;
         const recipients = await d.repos.users.listAllForBroadcast(500);
@@ -228,7 +273,7 @@ async function handleAdmin(ctx: Context, user: any, action: string, payload: str
     }
     case "broadcast_cancel": {
       await d.repos.users.setState(user.telegramId, "ADMIN_PANEL");
-      await editTo(ctx, "🛠 <b>Админ-панель</b>", adminPanelKeyboard());
+      await editTo(ctx, t(loc, "admin_panel_title"), adminPanelKeyboard(loc));
       return;
     }
   }
@@ -236,23 +281,49 @@ async function handleAdmin(ctx: Context, user: any, action: string, payload: str
 
 async function handleShare(ctx: Context, user: any, code: string): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   const link = `https://t.me/${d.botUsername}?start=ref_${code}`;
-  await editTo(ctx, `🎁 <b>Твоя ссылка для приглашения</b>\n\n<code>${link}</code>\n\nПоделись ею с друзьями.`, referralKeyboard(code, d.botUsername));
+  await editTo(ctx, t(loc, "referral_title") + "\n\n<code>" + link + "</code>", referralKeyboard(code, d.botUsername, loc));
 }
 
 async function showHistoryEdit(ctx: Context, user: any, page: number): Promise<void> {
   const d = deps();
+  const loc: Locale = user.language;
   const limit = 5;
   const total = await d.repos.readings.countByUser(user.id);
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const p = Math.min(Math.max(1, page), totalPages);
   const items = await d.repos.readings.listByUser(user.id, limit, (p - 1) * limit);
   if (items.length === 0) {
-    await editTo(ctx, "📜 У тебя ещё нет сохранённых раскладов. Хочешь сделать первый?",
-      new InlineKeyboard().text("🔮 Сделать расклад", "rd:menu").row().text("🏠 Меню", "nav:menu"));
+    await editTo(ctx, t(loc, "history_empty"),
+      new InlineKeyboard().text(t(loc, "history_make_first"), "rd:menu").row().text(t(loc, "menu_home"), "nav:menu"));
     return;
   }
-  const text = `<b>📜 Твои расклады (страница ${p}/${totalPages})</b>\n\n` +
-    items.map((r: any, i: number) => formatReadingHistoryItem(r, (p - 1) * limit + i + 1)).join("\n\n");
-  await editTo(ctx, text, historyPaginationKeyboard(p, totalPages));
+  const text = t(loc, "history_page", { page: String(p), total: String(totalPages) }) + "\n\n" +
+    items.map((r: any, i: number) => formatReadingHistoryItem(r, (p - 1) * limit + i + 1, loc)).join("\n\n");
+  await editTo(ctx, text, historyPaginationKeyboard(p, totalPages, loc));
+}
+
+// Affirmation via inline button (reuses the LLM call).
+async function sendAffirmationInline(ctx: Context, user: any): Promise<void> {
+  const d = deps();
+  const loc: Locale = user.language;
+  const prompt = loc === "en" ? AFFIRMATION_PROMPT_EN : AFFIRMATION_PROMPT_RU;
+  const messages = await d.services.context.buildMessages({
+    systemPrompt: SOFIA_SYSTEM_PROMPT,
+    userTelegramId: user.telegramId,
+    userName: user.name,
+    userZodiac: user.zodiacSign,
+    userAgeGroup: user.ageGroup,
+    currentUserMessage: prompt,
+  });
+  let body = loc === "en" ? "Be like still water today. 🌙" : "Будь как тихая вода сегодня. 🌙";
+  try {
+    const reply = await d.llm.generate(messages, { timeoutMs: 8000, maxTokens: 200 });
+    if (reply.content?.trim()) body = reply.content.trim();
+  } catch (e) {
+    (ctx as any).log?.warn?.({ err: e }, "inline affirmation LLM failed");
+  }
+  await editTo(ctx, t(loc, "affirmation_intro") + "\n\n" + body,
+    new InlineKeyboard().text(t(loc, "menu_home"), "nav:menu"));
 }

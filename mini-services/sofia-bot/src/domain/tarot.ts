@@ -101,3 +101,116 @@ export const FATE_CARD_PARTS = [
   { emoji: "⚡", label: "Слабое место" },
   { emoji: "🔑", label: "Главный вопрос" },
 ];
+
+// English card-name mapping (public-domain tarot names).
+export const MAJOR_ARCANA_EN: string[] = [
+  "The Fool", "The Magician", "The High Priestess", "The Empress", "The Emperor",
+  "The Hierophant", "The Lovers", "The Chariot", "Strength", "The Hermit",
+  "Wheel of Fortune", "Justice", "The Hanged Man", "Death", "Temperance",
+  "The Devil", "The Tower", "The Star", "The Moon", "The Sun", "Judgement", "The World",
+];
+
+export const SUIT_NAMES_EN: Record<string, string> = {
+  wands: "Wands",
+  cups: "Cups",
+  swords: "Swords",
+  pentacles: "Pentacles",
+};
+
+export const RANKS_EN = [
+  "Ace", "Two", "Three", "Four", "Five", "Six", "Seven",
+  "Eight", "Nine", "Ten", "Page", "Knight", "Queen", "King",
+];
+
+// Full English deck (parallel to FULL_DECK).
+export const FULL_DECK_EN: TarotCard[] = (() => {
+  const deck: TarotCard[] = MAJOR_ARCANA_EN.map((name) => ({ name, arcana: "major" as const }));
+  for (const suit of SUITS) {
+    for (let i = 0; i < RANKS_EN.length; i++) {
+      deck.push({
+        name: `${RANKS_EN[i]} of ${SUIT_NAMES_EN[suit]}`,
+        arcana: "minor" as const,
+        suit,
+        rank: RANKS_EN[i],
+      });
+    }
+  }
+  return deck;
+})();
+
+export function getCardByNumberLocalized(n: number, locale: "ru" | "en"): { name: string; reversed: boolean } {
+  const idx = ((n - 1) % 78 + 78) % 78;
+  const deck = locale === "en" ? FULL_DECK_EN : FULL_DECK;
+  const card = deck[idx];
+  const reversed = (n % 3) === 0;
+  return { name: card.name, reversed };
+}
+
+// Short one-line keywords for inline mode previews (Major Arcana only — most relevant for quick draws).
+export const MAJOR_ARCANA_KEYWORDS_RU: Record<string, string> = {
+  "Шут": "Новый путь. Шагнуть, не зная дороги.",
+  "Маг": "Сила в твоих руках. Время действовать.",
+  "Жрица": "Слушай тишину — там ответ.",
+  "Императрица": "Рост. Забота. Плоды созревают.",
+  "Император": "Опора. Структура. Найди твердую землю.",
+  "Иерофант": "Традиция. Учитель. Опора на древнее.",
+  "Влюблённые": "Выбор сердца. Не ума — сердца.",
+  "Колесница": "Воля. Движение. Победа через усилие.",
+  "Сила": "Мягкая сила. Терпение побеждает.",
+  "Отшельник": "Тишина. Внутренний свет. Помедли.",
+  "Колесо Фортуны": "Перемены. Цикл. Колесо повернулось.",
+  "Справедливость": "Равновесие. Правда. Что посеял — то и жнёшь.",
+  "Повешенный": "Пауза. Другой угол. Отпустить контроль.",
+  "Смерть": "Конец главы. Не конец книги. Трансформация.",
+  "Умеренность": "Баланс. Смешивание. Искусство середины.",
+  "Дьявол": "Привязанность. Тень. Что тебя держит?",
+  "Башня": "Старое рушится. Освобождение через слом.",
+  "Звезда": "Надежда. Свет в темноте. Доверие.",
+  "Луна": "Туман. Подсознание. Не всё ясно.",
+  "Солнце": "Радость. Ясность. Свет на лице.",
+  "Суд": "Возрождение. Призыв. Время услышать.",
+  "Мир": "Завершение. Целостность. Круг замкнулся.",
+};
+
+export const MAJOR_ARCANA_KEYWORDS_EN: Record<string, string> = {
+  "The Fool": "A new path. Step without knowing the road.",
+  "The Magician": "Power in your hands. Time to act.",
+  "The High Priestess": "Listen to the silence — the answer is there.",
+  "The Empress": "Growth. Care. Fruit ripening.",
+  "The Emperor": "Support. Structure. Find solid ground.",
+  "The Hierophant": "Tradition. Teacher. Lean on the ancient.",
+  "The Lovers": "A choice of heart, not mind.",
+  "The Chariot": "Will. Motion. Victory through effort.",
+  "Strength": "Soft strength. Patience wins.",
+  "The Hermit": "Stillness. Inner light. Linger.",
+  "Wheel of Fortune": "Change. Cycle. The wheel has turned.",
+  "Justice": "Balance. Truth. As you sow, so you reap.",
+  "The Hanged Man": "Pause. A different angle. Let go of control.",
+  "Death": "End of a chapter, not the book. Transformation.",
+  "Temperance": "Balance. Blending. The art of the middle.",
+  "The Devil": "Attachment. Shadow. What holds you?",
+  "The Tower": "The old crumbles. Freedom through breakage.",
+  "The Star": "Hope. Light in the dark. Trust.",
+  "The Moon": "Mist. The subconscious. Not all is clear.",
+  "The Sun": "Joy. Clarity. Light on the face.",
+  "Judgement": "Rebirth. A call. Time to hear.",
+  "The World": "Completion. Wholeness. The circle closes.",
+};
+
+// Pool of short affirmation prompts (rotated deterministically by day).
+export const AFFIRMATION_SEEDS_RU = [
+  "тишина и принятие сегодняшнего дня",
+  "доверие к тому, что ещё не видно",
+  "прощение себе за прошлые шаги",
+  "смелость быть неидеальным",
+  "благодарность за маленькое тепло",
+];
+
+export const AFFIRMATION_SEEDS_EN = [
+  "stillness and acceptance of today",
+  "trust in what is not yet visible",
+  "forgiveness for past steps",
+  "courage to be imperfect",
+  "gratitude for small warmth",
+];
+
